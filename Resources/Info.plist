@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.windowsnapper.app</string>
+    <string>com.zoned.app</string>
     <key>CFBundleName</key>
-    <string>WindowSnapper</string>
+    <string>Zoned</string>
     <key>CFBundleDisplayName</key>
-    <string>WindowSnapper</string>
+    <string>Zoned</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>CFBundleShortVersionString</key>
@@ -15,7 +15,7 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
-    <string>WindowSnapper</string>
+    <string>Zoned</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <!--
@@ -28,7 +28,7 @@
         Accessibility usage description (shown in the permission prompt).
     -->
     <key>NSAccessibilityUsageDescription</key>
-    <string>WindowSnapper needs Accessibility access to read and reposition windows belonging to other apps.</string>
+    <string>Zoned needs Accessibility access to read and reposition windows belonging to other apps.</string>
     <!-- Minimum macOS version -->
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>

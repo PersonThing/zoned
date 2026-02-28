@@ -36,7 +36,7 @@ class PreferencesWindowController: NSWindowController, NSWindowDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "WindowSnapper Preferences"
+        window.title = "Zoned Preferences"
         window.center()
         window.isReleasedWhenClosed = false
         self.init(window: window)

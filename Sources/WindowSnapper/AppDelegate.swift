@@ -36,13 +36,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem?.button {
             // SF Symbol available in macOS 11+
-            button.image = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: "WindowSnapper")
+            button.image = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: "Zoned")
             button.image?.isTemplate = true
         }
 
         let menu = NSMenu()
 
-        let header = NSMenuItem(title: "WindowSnapper", action: nil, keyEquivalent: "")
+        let header = NSMenuItem(title: "Zoned", action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
 
@@ -56,7 +56,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Preferences…",
                                 action: #selector(showPreferences),
                                 keyEquivalent: ","))
-        menu.addItem(NSMenuItem(title: "About WindowSnapper",
+        menu.addItem(NSMenuItem(title: "About Zoned",
                                 action: #selector(showAbout),
                                 keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Quit",
@@ -79,7 +79,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let s = KeyBindingSettings.shared
         let mod = s.cyclingModifier.displayString
         let alert = NSAlert()
-        alert.messageText = "WindowSnapper v0"
+        alert.messageText = "Zoned v0"
         alert.informativeText = """
         A minimal macOS window manager.
 
@@ -127,10 +127,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "Accessibility Permission Required"
         alert.informativeText = """
-        WindowSnapper needs Accessibility access to read and move windows.
+        Zoned needs Accessibility access to read and move windows.
 
         Go to: System Settings → Privacy & Security → Accessibility
-        Then enable WindowSnapper.
+        Then enable Zoned.
 
         Restart the app after granting permission.
         """

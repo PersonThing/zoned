@@ -1,19 +1,17 @@
 #!/usr/bin/env bash
-# build.sh — compile Zoned and assemble a .app bundle.
-#
-# Requirements:
-#   • Xcode Command Line Tools (xcode-select --install)
-#   • macOS 13+, arm64 or x86_64
+# release.sh — build Zoned.app and package a release ZIP for Homebrew distribution.
 #
 # Usage:
-#   chmod +x build.sh && ./build.sh
-#   open .build/Zoned.app
+#   chmod +x release.sh && ./release.sh
+#
+# Output:
+#   .release/Zoned-<version>.zip  (upload to GitHub Releases)
 
 set -euo pipefail
 
 APP_NAME="Zoned"
-BUNDLE_ID="com.zoned.app"
 BUILD_DIR=".build"
+RELEASE_DIR=".release"
 APP_DIR="$BUILD_DIR/$APP_NAME.app/Contents"
 
 SOURCES=(
@@ -31,9 +29,10 @@ SOURCES=(
 )
 
 # ── Clean ────────────────────────────────────────────────────────────────────
-rm -rf "$BUILD_DIR"
+rm -rf "$BUILD_DIR" "$RELEASE_DIR"
 mkdir -p "$APP_DIR/MacOS"
 mkdir -p "$APP_DIR/Resources"
+mkdir -p "$RELEASE_DIR"
 
 echo "▶  Compiling…"
 
@@ -58,27 +57,29 @@ swiftc \
 cp Resources/Info.plist "$APP_DIR/Info.plist"
 
 # ── Code Sign ────────────────────────────────────────────────────────────────
-# Signing with a stable identity keeps Accessibility trust across rebuilds.
 SIGN_ID=$(security find-identity -v -p codesigning | head -1 | sed 's/.*"\(.*\)".*/\1/')
 if [ -n "$SIGN_ID" ]; then
     echo "▶  Signing with: $SIGN_ID"
     codesign --force --sign "$SIGN_ID" --deep "$BUILD_DIR/$APP_NAME.app"
 else
-    echo "⚠️  No signing identity found — Accessibility trust won't persist across rebuilds."
-    echo "   See README for setup instructions."
+    echo "⚠️  No signing identity found — users may see Gatekeeper warnings."
 fi
 
-# ── Install ────────────────────────────────────────────────────────────────
-INSTALL_DIR="/Applications/$APP_NAME.app"
-pkill -x "$APP_NAME" 2>/dev/null && sleep 0.5 || true
-rm -rf "$INSTALL_DIR"
-cp -R "$BUILD_DIR/$APP_NAME.app" "$INSTALL_DIR"
+# ── Package ──────────────────────────────────────────────────────────────────
+VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_DIR/Info.plist")
+ZIP_NAME="Zoned-${VERSION}.zip"
+
+ditto -c -k --sequesterRsrc --keepParent "$BUILD_DIR/$APP_NAME.app" "$RELEASE_DIR/$ZIP_NAME"
+SHA=$(shasum -a 256 "$RELEASE_DIR/$ZIP_NAME" | awk '{print $1}')
 
 echo ""
-echo "✅  Built and installed: $INSTALL_DIR"
+echo "✅  $RELEASE_DIR/$ZIP_NAME"
+echo "    SHA-256: $SHA"
+echo "    Version: $VERSION"
 echo ""
-
-open "$INSTALL_DIR"
-
-echo "   First launch:  grant Accessibility permission when prompted."
-echo "                  System Settings → Privacy & Security → Accessibility"
+echo "Next steps:"
+echo "  1. git tag v$VERSION && git push --tags"
+echo "  2. GitHub → Releases → create release from tag v$VERSION"
+echo "  3. Upload $RELEASE_DIR/$ZIP_NAME to the release"
+echo "  4. Update sha256 and version in homebrew-zoned/Casks/zoned.rb"
+echo "  5. Push the tap repo"
