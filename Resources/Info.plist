@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.windowsnapper.app</string>
+    <key>CFBundleName</key>
+    <string>WindowSnapper</string>
+    <key>CFBundleDisplayName</key>
+    <string>WindowSnapper</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>WindowSnapper</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <!--
+        LSUIElement = true → agent app: no Dock icon, no app menu bar,
+        lives only as a status-bar (menu bar) item.
+    -->
+    <key>LSUIElement</key>
+    <true/>
+    <!--
+        Accessibility usage description (shown in the permission prompt).
+    -->
+    <key>NSAccessibilityUsageDescription</key>
+    <string>WindowSnapper needs Accessibility access to read and reposition windows belonging to other apps.</string>
+    <!-- Minimum macOS version -->
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+</dict>
+</plist>
