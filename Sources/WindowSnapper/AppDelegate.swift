@@ -8,11 +8,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var eventMonitor: EventMonitor?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Request / verify Accessibility permission; the prompt appears automatically.
-        let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true]
-        let trusted = AXIsProcessTrustedWithOptions(options)
-        if !trusted {
-            showPermissionAlert()
+        debugLog("applicationDidFinishLaunching")
+        // Check Accessibility trust silently — don't prompt or block.
+        // The user must grant access manually in System Settings → Privacy & Security → Accessibility.
+        if !AXIsProcessTrusted() {
+            debugLog("Accessibility not trusted — hotkeys will register but window operations will fail")
         }
 
         setupStatusBar()
@@ -41,13 +41,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        let infoItem = NSMenuItem(title: "⌃⌥Space — cycle positions", action: nil, keyEquivalent: "")
-        infoItem.isEnabled = false
-        menu.addItem(infoItem)
-
-        let dragItem = NSMenuItem(title: "⇧ + drag — snap to grid", action: nil, keyEquivalent: "")
-        dragItem.isEnabled = false
-        menu.addItem(dragItem)
+        for label in ["⌃⌥↑ — full screen", "⌃⌥→ — next zone", "⌃⌥← — prev zone"] {
+            let item = NSMenuItem(title: label, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        }
 
         menu.addItem(NSMenuItem.separator())
 
@@ -67,10 +65,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = """
         A minimal macOS window manager.
 
-        Hold ⇧ while dragging any window to snap it to a predefined zone.
-        Press ⌃⌥Space to cycle the focused window through layout presets.
-
-        Grid: 12 columns × 6 rows
+        ⌃⌥↑  Full screen on current monitor
+        ⌃⌥→  Next zone (wraps across monitors)
+        ⌃⌥←  Previous zone (wraps across monitors)
         """
         alert.runModal()
     }

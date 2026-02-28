@@ -1,38 +1,41 @@
 import AppKit
 import Carbon.HIToolbox
 
-// Monitors global mouse events (via CGEventTap) and a global hotkey (via Carbon).
+// Listens for global key/mouse events via CGEventTap.
 //
-// Shift + drag behaviour:
-//   1. leftMouseDown  with Shift held → record the AX window under the cursor.
-//   2. leftMouseDragged with Shift    → show overlay; highlight the snap zone.
-//   3. leftMouseUp   with Shift       → snap the recorded window; hide overlay.
-//   Releasing Shift at any point hides the overlay without snapping.
+// Keyboard:
+//   Hold ⌃⌥       — show zone overlay
+//   ⌃⌥↑           — full screen on current monitor
+//   ⌃⌥→           — next zone (wraps across monitors left-to-right)
+//   ⌃⌥←           — previous zone (wraps across monitors right-to-left)
+//   Release ⌃⌥    — hide overlay
 //
-// Cycle hotkey (⌃⌥Space):
-//   Moves the focused window through predefinedPositions on its current screen,
-//   then wraps around; each additional press moves to the next monitor.
+// Mouse:
+//   ⇧ + drag      — show zone overlay, snap window on release
 
 class EventMonitor {
 
     private let windowManager: WindowManager
     private let gridOverlay: GridOverlayController
 
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
-    private var carbonHandler: EventHandlerRef?
-    private var hotKeyRef: EventHotKeyRef?
+    private var keyTap: CFMachPort?
+    private var keyTapSource: CFRunLoopSource?
+    private var auxTap: CFMachPort?
+    private var auxTapSource: CFRunLoopSource?
 
-    // Drag state
+    // Tracks the last-applied zone index per display (keyed by CGDirectDisplayID).
+    private var lastZoneIndex: [UInt32: Int] = [:]
+
+    // Modifier overlay state
+    private var ctrlOptHeld = false
+
+    // Shift+drag state
     private var isShiftHeld = false
     private var draggedWindow: AXUIElement?
     private var mouseDownPoint: CGPoint?
     private var lastHighlightedPosition: WindowPosition?
     private var lastHighlightedScreen: NSScreen?
-
-    // Cycle state
-    private var cycleIndex = -1
-    private var cycleScreenIndex = 0
+    private var shiftDragOverlayShown = false
 
     init(windowManager: WindowManager, gridOverlay: GridOverlayController) {
         self.windowManager = windowManager
@@ -43,179 +46,353 @@ class EventMonitor {
 
     func start() {
         setupEventTap()
-        setupCycleHotkey()
     }
 
     func stop() {
-        if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: false) }
-        if let src = runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes) }
-        if let ref = hotKeyRef { UnregisterEventHotKey(ref) }
+        if let tap = keyTap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let src = keyTapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes) }
+        if let tap = auxTap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let src = auxTapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes) }
     }
 
     // MARK: - CGEventTap
+    //
+    // Two taps:
+    //   1. Active (.defaultTap) for keyDown — allows swallowing ⌃⌥+arrow events.
+    //   2. Listen-only (.listenOnly) for flagsChanged + mouse — these don't need
+    //      to be swallowed, and .defaultTap doesn't reliably deliver them.
 
     private func setupEventTap() {
-        let mask = CGEventMask(
-            (1 << CGEventType.leftMouseDown.rawValue)    |
-            (1 << CGEventType.leftMouseUp.rawValue)      |
-            (1 << CGEventType.leftMouseDragged.rawValue) |
-            (1 << CGEventType.flagsChanged.rawValue)
-        )
+        // ── Active tap: keyDown only ──────────────────────────────────────────
+        let keyMask = CGEventMask(1 << CGEventType.keyDown.rawValue)
 
-        // Use listenOnly so normal macOS window dragging is not disrupted.
-        guard let tap = CGEvent.tapCreate(
+        guard let kTap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
-            options: .listenOnly,
-            eventsOfInterest: mask,
+            options: .defaultTap,
+            eventsOfInterest: keyMask,
             callback: { _, type, event, refcon -> Unmanaged<CGEvent>? in
-                if let refcon = refcon {
-                    let monitor = Unmanaged<EventMonitor>.fromOpaque(refcon).takeUnretainedValue()
-                    monitor.handleCGEvent(type: type, event: event)
-                }
-                return Unmanaged.passRetained(event)
+                guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
+                let monitor = Unmanaged<EventMonitor>.fromOpaque(refcon).takeUnretainedValue()
+                return monitor.handleKeyEvent(type: type, event: event)
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            print("[WindowSnapper] Failed to create event tap – check Accessibility permission.")
+            debugLog("Failed to create key event tap – check Accessibility permission.")
             return
         }
 
-        eventTap = tap
-        let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        runLoopSource = src
-        CFRunLoopAddSource(CFRunLoopGetMain(), src, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
+        keyTap = kTap
+        let kSrc = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, kTap, 0)
+        keyTapSource = kSrc
+        CFRunLoopAddSource(CFRunLoopGetMain(), kSrc, .commonModes)
+        CGEvent.tapEnable(tap: kTap, enable: true)
+        debugLog("Key event tap (active) created and enabled")
+
+        // ── Listen-only tap: flagsChanged + mouse ─────────────────────────────
+        let auxMask = CGEventMask(
+            (1 << CGEventType.flagsChanged.rawValue)     |
+            (1 << CGEventType.leftMouseDown.rawValue)    |
+            (1 << CGEventType.leftMouseUp.rawValue)      |
+            (1 << CGEventType.leftMouseDragged.rawValue)
+        )
+
+        guard let aTap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .listenOnly,
+            eventsOfInterest: auxMask,
+            callback: { _, type, event, refcon -> Unmanaged<CGEvent>? in
+                guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
+                let monitor = Unmanaged<EventMonitor>.fromOpaque(refcon).takeUnretainedValue()
+                monitor.handleAuxEvent(type: type, event: event)
+                return Unmanaged.passUnretained(event)
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            debugLog("Failed to create aux event tap – check Accessibility permission.")
+            return
+        }
+
+        auxTap = aTap
+        let aSrc = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, aTap, 0)
+        auxTapSource = aSrc
+        CFRunLoopAddSource(CFRunLoopGetMain(), aSrc, .commonModes)
+        CGEvent.tapEnable(tap: aTap, enable: true)
+        debugLog("Aux event tap (listen-only) created and enabled")
     }
 
-    private func handleCGEvent(type: CGEventType, event: CGEvent) {
+    /// Active tap router (keyDown). Returns nil to swallow, or the event to pass through.
+    private func handleKeyEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .keyDown, handleKeyDown(event) {
+            return nil  // swallow
+        }
+        return Unmanaged.passUnretained(event)
+    }
+
+    /// Listen-only tap router (flagsChanged + mouse). Return value ignored by OS.
+    private func handleAuxEvent(type: CGEventType, event: CGEvent) {
         switch type {
-
         case .flagsChanged:
-            let shiftWasHeld = isShiftHeld
-            isShiftHeld = event.flags.contains(.maskShift)
-            if shiftWasHeld && !isShiftHeld {
-                // Shift released → discard overlay without snapping
-                DispatchQueue.main.async { self.cancelOverlay() }
-            }
-
+            handleFlagsChanged(event)
         case .leftMouseDown:
-            mouseDownPoint = event.location
-            if isShiftHeld {
-                // Capture the window under the cursor before the drag begins.
-                let loc = event.location
-                DispatchQueue.main.async {
-                    self.draggedWindow = self.windowManager.windowAtScreenPoint(loc)
-                }
-            }
-
+            handleMouseDown(event)
         case .leftMouseDragged:
-            guard isShiftHeld else { break }
-            let loc = event.location
-
-            // Require a minimum drag distance before showing the overlay.
-            if let start = mouseDownPoint {
-                let dx = loc.x - start.x, dy = loc.y - start.y
-                guard sqrt(dx*dx + dy*dy) > 8 else { break }
-            }
-
-            DispatchQueue.main.async {
-                if !self.gridOverlay.isVisible { self.gridOverlay.show() }
-
-                guard let screen = self.windowManager.screenContaining(cgPoint: loc),
-                      let np     = self.windowManager.normalizedPosition(cgPoint: loc, on: screen)
-                else { return }
-
-                let zone = self.windowManager.snapZone(forNormalized: np)
-                self.lastHighlightedPosition = zone
-                self.lastHighlightedScreen   = screen
-                self.gridOverlay.updateHighlight(zone, on: screen)
-            }
-
+            handleMouseDragged(event)
         case .leftMouseUp:
-            guard isShiftHeld, gridOverlay.isVisible else { break }
-            let loc = event.location
-
-            DispatchQueue.main.async {
-                defer { self.cancelOverlay() }
-
-                guard let pos    = self.lastHighlightedPosition,
-                      let screen = self.lastHighlightedScreen
-                else { return }
-
-                // Use the window captured at mouseDown, falling back to the focused window.
-                let window = self.draggedWindow ?? self.windowManager.focusedWindow()
-                guard let window = window else { return }
-
-                let frame = self.windowManager.frameForCell(pos.cell, on: screen)
-                self.windowManager.setWindowFrame(window, frame: frame)
-                _ = loc   // suppress warning; loc already read above
-            }
-
+            handleMouseUp(event)
         default:
             break
         }
     }
 
-    private func cancelOverlay() {
-        gridOverlay.hide()
+    // MARK: - Flags Changed (modifier tracking)
+
+    private func handleFlagsChanged(_ event: CGEvent) {
+        let flags = event.flags
+
+        // ── Ctrl+Opt overlay ────────────────────────────────────────────────
+        let hasCtrl = flags.contains(.maskControl)
+        let hasOpt  = flags.contains(.maskAlternate)
+        let wasHeld = ctrlOptHeld
+        ctrlOptHeld = hasCtrl && hasOpt
+
+        if ctrlOptHeld && !wasHeld {
+            debugLog("⌃⌥ held — showing overlay")
+            DispatchQueue.main.async {
+                if !self.gridOverlay.isVisible { self.gridOverlay.show() }
+                self.highlightCurrentZone()
+            }
+        } else if !ctrlOptHeld && wasHeld && !shiftDragOverlayShown {
+            debugLog("⌃⌥ released — hiding overlay")
+            DispatchQueue.main.async { self.gridOverlay.hide() }
+        }
+
+        // ── Shift tracking for drag ─────────────────────────────────────────
+        let shiftWasHeld = isShiftHeld
+        isShiftHeld = flags.contains(.maskShift)
+        if shiftWasHeld && !isShiftHeld {
+            // Shift released mid-drag → cancel without snapping
+            DispatchQueue.main.async { self.cancelShiftDrag() }
+        }
+    }
+
+    // MARK: - Key Down (⌃⌥ + arrow keys)
+
+    /// Returns true if the event was handled (should be swallowed).
+    private func handleKeyDown(_ event: CGEvent) -> Bool {
+        let flags = event.flags
+        let hasCtrl  = flags.contains(.maskControl)
+        let hasOpt   = flags.contains(.maskAlternate)
+        let hasCmd   = flags.contains(.maskCommand)
+        let hasShift = flags.contains(.maskShift)
+
+        guard hasCtrl && hasOpt && !hasCmd && !hasShift else { return false }
+
+        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+
+        switch Int(keyCode) {
+        case kVK_UpArrow:
+            handleFullScreen()
+            return true
+        case kVK_RightArrow:
+            handleNextZone()
+            return true
+        case kVK_LeftArrow:
+            handlePrevZone()
+            return true
+        default:
+            return false
+        }
+    }
+
+    // MARK: - Shift + Drag
+
+    private func handleMouseDown(_ event: CGEvent) {
+        mouseDownPoint = event.location
+        if isShiftHeld {
+            debugLog("shift+mouseDown at \(event.location)")
+            let loc = event.location
+            DispatchQueue.main.async {
+                self.draggedWindow = self.windowManager.windowAtScreenPoint(loc)
+            }
+        }
+    }
+
+    private func handleMouseDragged(_ event: CGEvent) {
+        guard isShiftHeld else { return }
+        let loc = event.location
+
+        // Require minimum drag distance
+        if let start = mouseDownPoint {
+            let dx = loc.x - start.x, dy = loc.y - start.y
+            guard sqrt(dx*dx + dy*dy) > 8 else { return }
+        }
+
+        DispatchQueue.main.async {
+            if !self.gridOverlay.isVisible {
+                self.gridOverlay.show()
+                self.shiftDragOverlayShown = true
+            }
+
+            guard let screen = self.windowManager.screenContaining(cgPoint: loc),
+                  let np = self.windowManager.normalizedPosition(cgPoint: loc, on: screen)
+            else { return }
+
+            let zone = self.windowManager.snapZone(forNormalized: np)
+            self.lastHighlightedPosition = zone
+            self.lastHighlightedScreen = screen
+            self.gridOverlay.highlightZone(zone, on: screen)
+        }
+    }
+
+    private func handleMouseUp(_ event: CGEvent) {
+        guard isShiftHeld, shiftDragOverlayShown else { return }
+
+        DispatchQueue.main.async {
+            defer { self.cancelShiftDrag() }
+
+            guard let pos = self.lastHighlightedPosition,
+                  let screen = self.lastHighlightedScreen
+            else { return }
+
+            let window = self.draggedWindow ?? self.windowManager.focusedWindow()
+            guard let window = window else { return }
+
+            let frame = self.windowManager.frameForCell(pos.cell, on: screen)
+            self.windowManager.setWindowFrame(window, frame: frame)
+        }
+    }
+
+    private func cancelShiftDrag() {
+        if shiftDragOverlayShown {
+            gridOverlay.hide()
+            shiftDragOverlayShown = false
+        }
         draggedWindow = nil
         mouseDownPoint = nil
         lastHighlightedPosition = nil
-        lastHighlightedScreen   = nil
+        lastHighlightedScreen = nil
     }
 
-    // MARK: - Cycle Hotkey  (⌃⌥Space)
+    // MARK: - Full Screen (⌃⌥↑)
 
-    private func setupCycleHotkey() {
-        var eventType = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
+    private func handleFullScreen() {
+        guard let window = windowManager.focusedWindow(),
+              let screen = windowManager.screenFor(window: window)
+        else { return }
 
-        InstallApplicationEventHandler(
-            { _, _, userData -> OSStatus in
-                guard let ptr = userData else { return noErr }
-                Unmanaged<EventMonitor>.fromOpaque(ptr).takeUnretainedValue().cycleWindowPosition()
-                return noErr
-            },
-            1, &eventType,
-            Unmanaged.passUnretained(self).toOpaque(),
-            &carbonHandler
-        )
+        let frame = windowManager.frameForCell(fullScreenZone.cell, on: screen)
+        windowManager.setWindowFrame(window, frame: frame)
 
-        // Signature 'WSNP' = 0x574F534E... let's just use a numeric literal.
-        var hotKeyID = EventHotKeyID(signature: 0x57534E50, id: 1)  // 'WSNP'
-        RegisterEventHotKey(
-            UInt32(kVK_Space),
-            UInt32(controlKey | optionKey),
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &hotKeyRef
-        )
-    }
-
-    // Cycle through predefined positions on the current screen, then advance to the next screen.
-    private func cycleWindowPosition() {
-        guard let window = windowManager.focusedWindow() else { return }
-
-        let screens = NSScreen.screens
-        guard !screens.isEmpty else { return }
-
-        // Advance the position index; wrap to next screen after the last position.
-        cycleIndex += 1
-        if cycleIndex >= predefinedPositions.count {
-            cycleIndex = 0
-            cycleScreenIndex = (cycleScreenIndex + 1) % screens.count
+        if let did = displayID(for: screen) {
+            lastZoneIndex.removeValue(forKey: did)
         }
 
-        // Make sure the screen index is still valid (screens can change).
-        cycleScreenIndex = min(cycleScreenIndex, screens.count - 1)
-        let screen = screens[cycleScreenIndex]
+        DispatchQueue.main.async { self.highlightCurrentZone() }
+    }
 
-        let position = predefinedPositions[cycleIndex]
-        let frame = windowManager.frameForCell(position.cell, on: screen)
+    // MARK: - Next Zone (⌃⌥→)
+
+    private func handleNextZone() {
+        guard let window = windowManager.focusedWindow(),
+              let currentScreen = windowManager.screenFor(window: window)
+        else { return }
+
+        let screens = sortedScreens()
+        guard !screens.isEmpty else { return }
+
+        let currentScreenIdx = screens.firstIndex(of: currentScreen) ?? 0
+        var screenIdx = currentScreenIdx
+        var screen = screens[screenIdx]
+        var zones = zoneRegistry.zones(for: screen)
+        let did = displayID(for: screen) ?? 0
+
+        var zoneIdx = (lastZoneIndex[did] ?? -1) + 1
+
+        if zoneIdx >= zones.count {
+            screenIdx = (screenIdx + 1) % screens.count
+            screen = screens[screenIdx]
+            zones = zoneRegistry.zones(for: screen)
+            zoneIdx = 0
+        }
+
+        guard !zones.isEmpty else { return }
+
+        let zone = zones[zoneIdx]
+        let frame = windowManager.frameForCell(zone.cell, on: screen)
         windowManager.setWindowFrame(window, frame: frame)
+
+        let newDid = displayID(for: screen) ?? 0
+        lastZoneIndex[newDid] = zoneIdx
+
+        DispatchQueue.main.async {
+            self.gridOverlay.highlightZone(index: zoneIdx, on: screen)
+        }
+    }
+
+    // MARK: - Previous Zone (⌃⌥←)
+
+    private func handlePrevZone() {
+        guard let window = windowManager.focusedWindow(),
+              let currentScreen = windowManager.screenFor(window: window)
+        else { return }
+
+        let screens = sortedScreens()
+        guard !screens.isEmpty else { return }
+
+        let currentScreenIdx = screens.firstIndex(of: currentScreen) ?? 0
+        var screenIdx = currentScreenIdx
+        var screen = screens[screenIdx]
+        var zones = zoneRegistry.zones(for: screen)
+        let did = displayID(for: screen) ?? 0
+
+        let lastIdx = lastZoneIndex[did]
+        var zoneIdx: Int
+
+        if let lastIdx = lastIdx {
+            zoneIdx = lastIdx - 1
+        } else {
+            zoneIdx = zones.count - 1
+        }
+
+        if zoneIdx < 0 {
+            screenIdx = (screenIdx - 1 + screens.count) % screens.count
+            screen = screens[screenIdx]
+            zones = zoneRegistry.zones(for: screen)
+            zoneIdx = zones.count - 1
+        }
+
+        guard !zones.isEmpty else { return }
+
+        let zone = zones[zoneIdx]
+        let frame = windowManager.frameForCell(zone.cell, on: screen)
+        windowManager.setWindowFrame(window, frame: frame)
+
+        let newDid = displayID(for: screen) ?? 0
+        lastZoneIndex[newDid] = zoneIdx
+
+        DispatchQueue.main.async {
+            self.gridOverlay.highlightZone(index: zoneIdx, on: screen)
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func highlightCurrentZone() {
+        guard let window = windowManager.focusedWindow(),
+              let screen = windowManager.screenFor(window: window),
+              let did = displayID(for: screen),
+              let idx = lastZoneIndex[did]
+        else { return }
+        gridOverlay.highlightZone(index: idx, on: screen)
+    }
+
+    private func sortedScreens() -> [NSScreen] {
+        NSScreen.screens.sorted { $0.frame.origin.x < $1.frame.origin.x }
+    }
+
+    private func displayID(for screen: NSScreen) -> UInt32? {
+        screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32
     }
 }

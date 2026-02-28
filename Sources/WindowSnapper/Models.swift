@@ -1,5 +1,4 @@
-import Foundation
-import CoreGraphics
+import AppKit
 
 let GRID_COLS = 12
 let GRID_ROWS = 6
@@ -20,21 +19,52 @@ struct WindowPosition: Equatable {
     }
 }
 
-// Predefined snap positions, also used for the cycle hotkey (⌃⌥Space)
-let predefinedPositions: [WindowPosition] = [
-    WindowPosition(name: "Left Half",       cell: GridCell(col: 0,  row: 0, colSpan: 6,  rowSpan: 6)),
-    WindowPosition(name: "Right Half",      cell: GridCell(col: 6,  row: 0, colSpan: 6,  rowSpan: 6)),
-    WindowPosition(name: "Full Screen",     cell: GridCell(col: 0,  row: 0, colSpan: 12, rowSpan: 6)),
-    WindowPosition(name: "Top Left",        cell: GridCell(col: 0,  row: 0, colSpan: 6,  rowSpan: 3)),
-    WindowPosition(name: "Top Right",       cell: GridCell(col: 6,  row: 0, colSpan: 6,  rowSpan: 3)),
-    WindowPosition(name: "Bottom Left",     cell: GridCell(col: 0,  row: 3, colSpan: 6,  rowSpan: 3)),
-    WindowPosition(name: "Bottom Right",    cell: GridCell(col: 6,  row: 3, colSpan: 6,  rowSpan: 3)),
-    WindowPosition(name: "Left Third",      cell: GridCell(col: 0,  row: 0, colSpan: 4,  rowSpan: 6)),
-    WindowPosition(name: "Center Third",    cell: GridCell(col: 4,  row: 0, colSpan: 4,  rowSpan: 6)),
-    WindowPosition(name: "Right Third",     cell: GridCell(col: 8,  row: 0, colSpan: 4,  rowSpan: 6)),
-    WindowPosition(name: "Left ⅔",         cell: GridCell(col: 0,  row: 0, colSpan: 8,  rowSpan: 6)),
-    WindowPosition(name: "Right ⅔",        cell: GridCell(col: 4,  row: 0, colSpan: 8,  rowSpan: 6)),
-    WindowPosition(name: "Top Half",        cell: GridCell(col: 0,  row: 0, colSpan: 12, rowSpan: 3)),
-    WindowPosition(name: "Bottom Half",     cell: GridCell(col: 0,  row: 3, colSpan: 12, rowSpan: 3)),
-    WindowPosition(name: "Center",          cell: GridCell(col: 2,  row: 1, colSpan: 8,  rowSpan: 4)),
-]
+let fullScreenZone = WindowPosition(
+    name: "Full Screen",
+    cell: GridCell(col: 0, row: 0, colSpan: 12, rowSpan: 6)
+)
+
+// MARK: - Per-Resolution Zone Registry
+
+struct ScreenResolution: Hashable {
+    let width: Int
+    let height: Int
+}
+
+struct ZoneRegistry {
+    let defaultZones: [WindowPosition]
+    let resolutionOverrides: [ScreenResolution: [WindowPosition]]
+
+    func zones(for screen: NSScreen) -> [WindowPosition] {
+        let pw = Int(screen.frame.width * screen.backingScaleFactor)
+        let ph = Int(screen.frame.height * screen.backingScaleFactor)
+        let res = ScreenResolution(width: pw, height: ph)
+        return resolutionOverrides[res] ?? defaultZones
+    }
+}
+
+let zoneRegistry = ZoneRegistry(
+    defaultZones: [
+        WindowPosition(name: "Left Third",   cell: GridCell(col: 0, row: 0, colSpan: 4, rowSpan: 6)),
+        WindowPosition(name: "Left Half",    cell: GridCell(col: 0, row: 0, colSpan: 6, rowSpan: 6)),
+        WindowPosition(name: "Left 2/3",     cell: GridCell(col: 0, row: 0, colSpan: 8, rowSpan: 6)),
+        WindowPosition(name: "Middle Third", cell: GridCell(col: 4, row: 0, colSpan: 4, rowSpan: 6)),
+        WindowPosition(name: "Right 2/3",    cell: GridCell(col: 4, row: 0, colSpan: 8, rowSpan: 6)),
+        WindowPosition(name: "Right Half",   cell: GridCell(col: 6, row: 0, colSpan: 6, rowSpan: 6)),
+        WindowPosition(name: "Right Third",  cell: GridCell(col: 8, row: 0, colSpan: 4, rowSpan: 6)),
+    ],
+    resolutionOverrides: [
+        ScreenResolution(width: 5120, height: 1440): [
+            WindowPosition(name: "Left 1/4",   cell: GridCell(col: 0, row: 0, colSpan: 3, rowSpan: 6)),
+            WindowPosition(name: "Left 1/3",   cell: GridCell(col: 0, row: 0, colSpan: 4, rowSpan: 6)),
+            WindowPosition(name: "Left 1/2",   cell: GridCell(col: 0, row: 0, colSpan: 6, rowSpan: 6)),
+            WindowPosition(name: "Left 2/3",   cell: GridCell(col: 0, row: 0, colSpan: 8, rowSpan: 6)),
+            WindowPosition(name: "Middle 1/3", cell: GridCell(col: 4, row: 0, colSpan: 4, rowSpan: 6)),
+            WindowPosition(name: "Middle 1/2", cell: GridCell(col: 3, row: 0, colSpan: 6, rowSpan: 6)),
+            WindowPosition(name: "Right 2/3",  cell: GridCell(col: 4, row: 0, colSpan: 8, rowSpan: 6)),
+            WindowPosition(name: "Right 1/2",  cell: GridCell(col: 6, row: 0, colSpan: 6, rowSpan: 6)),
+            WindowPosition(name: "Right 1/3",  cell: GridCell(col: 8, row: 0, colSpan: 4, rowSpan: 6)),
+            WindowPosition(name: "Right 1/4",  cell: GridCell(col: 9, row: 0, colSpan: 3, rowSpan: 6)),
+        ],
+    ]
+)

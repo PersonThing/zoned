@@ -53,6 +53,17 @@ swiftc \
 # ── Bundle ───────────────────────────────────────────────────────────────────
 cp Resources/Info.plist "$APP_DIR/Info.plist"
 
+# ── Code Sign ────────────────────────────────────────────────────────────────
+# Signing with a stable identity keeps Accessibility trust across rebuilds.
+SIGN_ID=$(security find-identity -v -p codesigning | head -1 | sed 's/.*"\(.*\)".*/\1/')
+if [ -n "$SIGN_ID" ]; then
+    echo "▶  Signing with: $SIGN_ID"
+    codesign --force --sign "$SIGN_ID" --deep "$BUILD_DIR/$APP_NAME.app"
+else
+    echo "⚠️  No signing identity found — Accessibility trust won't persist across rebuilds."
+    echo "   See README for setup instructions."
+fi
+
 echo ""
 echo "✅  Built: $BUILD_DIR/$APP_NAME.app"
 echo ""

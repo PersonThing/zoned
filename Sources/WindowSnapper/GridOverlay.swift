@@ -1,6 +1,6 @@
 import AppKit
 
-// Manages one floating NSPanel per screen that together form the grid overlay.
+// Manages one floating NSPanel per screen that together form the zone overlay.
 // The overlay is purely visual: it ignores mouse events so window dragging
 // continues normally through it.
 class GridOverlayController {
@@ -16,6 +16,7 @@ class GridOverlayController {
 
     // MARK: - Show / Hide
 
+    /// Show the overlay on all screens, displaying each screen's zones from the registry.
     func show() {
         guard !isVisible else { return }
         isVisible = true
@@ -23,26 +24,60 @@ class GridOverlayController {
         for screen in NSScreen.screens {
             let panel = makePanel(for: screen)
             let gridView = panel.contentView as! GridView
+            gridView.zones = zoneRegistry.zones(for: screen)
             panels.append(ScreenPanel(screen: screen, panel: panel, gridView: gridView))
+            panel.alphaValue = 0
             panel.orderFront(nil)
+        }
+
+        // Fade in
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.15
+            for sp in panels {
+                sp.panel.animator().alphaValue = 1.0
+            }
         }
     }
 
     func hide() {
         guard isVisible else { return }
         isVisible = false
-        for sp in panels { sp.panel.orderOut(nil) }
+
+        let panelsToRemove = panels
         panels.removeAll()
+
+        // Fade out
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.10
+            for sp in panelsToRemove {
+                sp.panel.animator().alphaValue = 0
+            }
+        }, completionHandler: {
+            for sp in panelsToRemove { sp.panel.orderOut(nil) }
+        })
     }
 
     // MARK: - Highlight
 
-    func updateHighlight(_ position: WindowPosition?, on activeScreen: NSScreen) {
+    /// Highlight a zone by index on the given screen. Pass nil to clear.
+    func highlightZone(index: Int?, on activeScreen: NSScreen) {
         for sp in panels {
             if sp.screen == activeScreen {
-                sp.gridView.highlightedPosition = position
+                sp.gridView.highlightedIndex = index
             } else {
-                sp.gridView.highlightedPosition = nil
+                sp.gridView.highlightedIndex = nil
+            }
+            sp.gridView.needsDisplay = true
+        }
+    }
+
+    /// Highlight a zone by matching a WindowPosition on the given screen.
+    func highlightZone(_ position: WindowPosition?, on activeScreen: NSScreen) {
+        for sp in panels {
+            if sp.screen == activeScreen, let pos = position {
+                sp.gridView.highlightedIndex = sp.gridView.zones.firstIndex(of: pos)
+            } else {
+                sp.gridView.highlightedIndex = nil
             }
             sp.gridView.needsDisplay = true
         }
@@ -58,7 +93,6 @@ class GridOverlayController {
             defer: false,
             screen: screen
         )
-        // Float above everything, including full-screen apps
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.maximumWindow)) - 1)
         panel.isOpaque = false
         panel.backgroundColor = .clear
