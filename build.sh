@@ -64,9 +64,17 @@ else
     echo "   See README for setup instructions."
 fi
 
+# ── Install ────────────────────────────────────────────────────────────────
+INSTALL_DIR="/Applications/$APP_NAME.app"
+pkill -x "$APP_NAME" 2>/dev/null && sleep 0.5 || true
+rm -rf "$INSTALL_DIR"
+cp -R "$BUILD_DIR/$APP_NAME.app" "$INSTALL_DIR"
+
 echo ""
-echo "✅  Built: $BUILD_DIR/$APP_NAME.app"
+echo "✅  Built and installed: $INSTALL_DIR"
 echo ""
-echo "   To run:        open $BUILD_DIR/$APP_NAME.app"
+
+open "$INSTALL_DIR"
+
 echo "   First launch:  grant Accessibility permission when prompted."
 echo "                  System Settings → Privacy & Security → Accessibility"

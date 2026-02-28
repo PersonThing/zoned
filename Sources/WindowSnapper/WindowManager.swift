@@ -43,23 +43,51 @@ class WindowManager {
     func setWindowFrame(_ window: AXUIElement, frame: CGRect) {
         var origin = frame.origin
         var size = frame.size
+
+        // Position → Size → Position: some apps (notably Electron-based ones like
+        // Claude Desktop) clamp the window origin when the size changes, so we set
+        // position a second time to ensure the final frame is correct.
         if let posValue = AXValueCreate(.cgPoint, &origin) {
-            AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posValue)
+            let r1 = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posValue)
+            if r1 != .success { debugLog("setWindowFrame: set position failed (\(r1.rawValue))") }
         }
         if let sizeValue = AXValueCreate(.cgSize, &size) {
-            AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue)
+            let r2 = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue)
+            if r2 != .success { debugLog("setWindowFrame: set size failed (\(r2.rawValue))") }
+        }
+        if let posValue = AXValueCreate(.cgPoint, &origin) {
+            let r3 = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posValue)
+            if r3 != .success { debugLog("setWindowFrame: set position (2nd) failed (\(r3.rawValue))") }
         }
     }
 
     func focusedWindow() -> AXUIElement? {
-        let system = AXUIElementCreateSystemWide()
-        var focusedApp: AnyObject?
-        guard AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &focusedApp) == .success,
-              let app = focusedApp
-        else { return nil }
+        // Try AX system-wide first, fall back to NSWorkspace for apps where
+        // kAXFocusedApplicationAttribute fails (e.g. some terminal emulators).
+        let app: AXUIElement? = {
+            let system = AXUIElementCreateSystemWide()
+            var focusedApp: AnyObject?
+            let r = AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &focusedApp)
+            if r == .success, let a = focusedApp {
+                return (a as! AXUIElement)
+            }
+            debugLog("focusedWindow: AX focused app failed (\(r.rawValue)), trying NSWorkspace")
+            guard let frontmost = NSWorkspace.shared.frontmostApplication else {
+                debugLog("focusedWindow: no frontmost application")
+                return nil
+            }
+            debugLog("focusedWindow: NSWorkspace frontmost=\(frontmost.localizedName ?? "?")")
+            return AXUIElementCreateApplication(frontmost.processIdentifier)
+        }()
+
+        guard let app = app else { return nil }
+
         var focusedWindow: AnyObject?
-        AXUIElementCopyAttributeValue(app as! AXUIElement, kAXFocusedWindowAttribute as CFString, &focusedWindow)
-        guard let w = focusedWindow else { return nil }
+        let result = AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &focusedWindow)
+        guard let w = focusedWindow else {
+            debugLog("focusedWindow: no focused window (error \(result.rawValue))")
+            return nil
+        }
         return (w as! AXUIElement)
     }
 
@@ -113,43 +141,29 @@ class WindowManager {
 
     // MARK: - Zone Detection
 
-    // Given a normalised cursor position on a screen, return the best predefined snap zone.
-    // np.x: 0=left, 1=right
-    // np.y: 0=bottom, 1=top  (AppKit y-up)
-    func snapZone(forNormalized np: CGPoint) -> WindowPosition {
-        let nx = np.x
-        let ny = np.y
+    /// Returns the registry zone whose center is nearest to `cgPoint` on `screen`,
+    /// along with its index in the zone array.
+    func nearestZone(to cgPoint: CGPoint, on screen: NSScreen) -> (index: Int, zone: WindowPosition)? {
+        let zones = zoneRegistry.zones(for: screen)
+        guard !zones.isEmpty else { return nil }
 
-        // Centre region → Full Screen
-        let inCenterX = nx > 0.30 && nx < 0.70
-        let inCenterY = ny > 0.30 && ny < 0.70
-        if inCenterX && inCenterY {
-            return WindowPosition(name: "Full Screen", cell: GridCell(col: 0, row: 0, colSpan: 12, rowSpan: 6))
+        var bestIdx = 0
+        var bestDist = CGFloat.greatestFiniteMagnitude
+
+        for (i, zone) in zones.enumerated() {
+            let frame = frameForCell(zone.cell, on: screen)  // CG coords
+            let cx = frame.midX
+            let cy = frame.midY
+            let dx = cgPoint.x - cx
+            let dy = cgPoint.y - cy
+            let dist = dx * dx + dy * dy  // squared distance is fine for comparison
+            if dist < bestDist {
+                bestDist = dist
+                bestIdx = i
+            }
         }
 
-        let isLeft  = nx <= 0.5
-        let isRight = nx >  0.5
-        let isTop    = ny >  0.5   // AppKit: large y = top
-        let isBottom = ny <= 0.5
-
-        let inLeftEdge   = nx < 0.25
-        let inRightEdge  = nx > 0.75
-        let inTopEdge    = ny > 0.75
-        let inBottomEdge = ny < 0.25
-
-        // Corner zones (edge strips)
-        if inLeftEdge  && inTopEdge    { return WindowPosition(name: "Top Left",     cell: GridCell(col: 0, row: 0, colSpan: 6, rowSpan: 3)) }
-        if inRightEdge && inTopEdge    { return WindowPosition(name: "Top Right",    cell: GridCell(col: 6, row: 0, colSpan: 6, rowSpan: 3)) }
-        if inLeftEdge  && inBottomEdge { return WindowPosition(name: "Bottom Left",  cell: GridCell(col: 0, row: 3, colSpan: 6, rowSpan: 3)) }
-        if inRightEdge && inBottomEdge { return WindowPosition(name: "Bottom Right", cell: GridCell(col: 6, row: 3, colSpan: 6, rowSpan: 3)) }
-
-        // Half zones
-        if isLeft  && !inCenterX { return WindowPosition(name: "Left Half",   cell: GridCell(col: 0, row: 0, colSpan: 6,  rowSpan: 6)) }
-        if isRight && !inCenterX { return WindowPosition(name: "Right Half",  cell: GridCell(col: 6, row: 0, colSpan: 6,  rowSpan: 6)) }
-        if isTop   && !inCenterY { return WindowPosition(name: "Top Half",    cell: GridCell(col: 0, row: 0, colSpan: 12, rowSpan: 3)) }
-        if isBottom && !inCenterY { return WindowPosition(name: "Bottom Half", cell: GridCell(col: 0, row: 3, colSpan: 12, rowSpan: 3)) }
-
-        return WindowPosition(name: "Full Screen", cell: GridCell(col: 0, row: 0, colSpan: 12, rowSpan: 6))
+        return (bestIdx, zones[bestIdx])
     }
 
     func screenFor(window: AXUIElement) -> NSScreen? {

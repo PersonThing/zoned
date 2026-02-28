@@ -160,7 +160,14 @@ class EventMonitor {
         if ctrlOptHeld && !wasHeld {
             debugLog("⌃⌥ held — showing overlay")
             DispatchQueue.main.async {
-                if !self.gridOverlay.isVisible { self.gridOverlay.show() }
+                if !self.gridOverlay.isVisible {
+                    // Show overlay on the focused window's screen
+                    let screen: NSScreen? = {
+                        guard let win = self.windowManager.focusedWindow() else { return nil }
+                        return self.windowManager.screenFor(window: win)
+                    }()
+                    self.gridOverlay.show(on: screen)
+                }
                 self.highlightCurrentZone()
             }
         } else if !ctrlOptHeld && wasHeld && !shiftDragOverlayShown {
@@ -230,19 +237,19 @@ class EventMonitor {
         }
 
         DispatchQueue.main.async {
+            guard let screen = self.windowManager.screenContaining(cgPoint: loc)
+            else { return }
+
             if !self.gridOverlay.isVisible {
-                self.gridOverlay.show()
+                self.gridOverlay.show(on: screen)
                 self.shiftDragOverlayShown = true
             }
 
-            guard let screen = self.windowManager.screenContaining(cgPoint: loc),
-                  let np = self.windowManager.normalizedPosition(cgPoint: loc, on: screen)
+            guard let (idx, zone) = self.windowManager.nearestZone(to: loc, on: screen)
             else { return }
-
-            let zone = self.windowManager.snapZone(forNormalized: np)
             self.lastHighlightedPosition = zone
             self.lastHighlightedScreen = screen
-            self.gridOverlay.highlightZone(zone, on: screen)
+            self.gridOverlay.highlightZone(index: idx, on: screen)
         }
     }
 

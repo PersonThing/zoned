@@ -1,8 +1,7 @@
 import AppKit
 
-// Manages one floating NSPanel per screen that together form the zone overlay.
-// The overlay is purely visual: it ignores mouse events so window dragging
-// continues normally through it.
+// Manages a small floating preview panel that shows the zone layout in miniature.
+// The panel is centered on the active screen and ignores mouse events.
 class GridOverlayController {
 
     private struct ScreenPanel {
@@ -14,14 +13,21 @@ class GridOverlayController {
     private var panels: [ScreenPanel] = []
     private(set) var isVisible = false
 
+    /// Preview panel is ~15% of screen width, aspect-matched to the screen.
+    private static let previewScale: CGFloat = 0.15
+
     // MARK: - Show / Hide
 
-    /// Show the overlay on all screens, displaying each screen's zones from the registry.
-    func show() {
+    /// Show the overlay. If `onScreen` is provided, show only on that screen;
+    /// otherwise show on all screens.
+    func show(on onScreen: NSScreen? = nil) {
         guard !isVisible else { return }
         isVisible = true
 
-        for screen in NSScreen.screens {
+        let screens = onScreen.map { [$0] } ?? NSScreen.screens
+        debugLog("overlay show: \(screens.count) screen(s)")
+
+        for screen in screens {
             let panel = makePanel(for: screen)
             let gridView = panel.contentView as! GridView
             gridView.zones = zoneRegistry.zones(for: screen)
@@ -86,23 +92,34 @@ class GridOverlayController {
     // MARK: - Panel Construction
 
     private func makePanel(for screen: NSScreen) -> NSPanel {
+        let vf = screen.visibleFrame
+        let previewW = round(vf.width * Self.previewScale)
+        let previewH = round(vf.height * Self.previewScale)
+
+        // Center on the screen's visible frame (AppKit coordinates)
+        let panelX = vf.midX - previewW / 2
+        let panelY = vf.midY - previewH / 2
+        let panelFrame = NSRect(x: panelX, y: panelY, width: previewW, height: previewH)
+
         let panel = NSPanel(
-            contentRect: screen.frame,
+            contentRect: panelFrame,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
-            defer: false,
-            screen: screen
+            defer: false
         )
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.maximumWindow)) - 1)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = false
+        panel.hasShadow = true
         panel.ignoresMouseEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
+        panel.setFrame(panelFrame, display: false)
 
-        let gridView = GridView(frame: NSRect(origin: .zero, size: screen.frame.size))
-        gridView.screen = screen
+        let gridView = GridView(frame: NSRect(origin: .zero, size: panelFrame.size))
+        gridView.wantsLayer = true
+        gridView.layer?.cornerRadius = 10
+        gridView.layer?.masksToBounds = true
         panel.contentView = gridView
 
         return panel

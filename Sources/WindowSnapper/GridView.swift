@@ -1,37 +1,21 @@
 import AppKit
 
-// NSView that renders the zone overlay on one screen.
-// Coordinate note: NSView uses AppKit coords (y-up). The view's bounds map to
-// screen.frame (AppKit). Cells are drawn within screen.visibleFrame (AppKit).
+// NSView that renders the zone layout in miniature.
+// The entire view bounds represent the screen's visible area, scaled down.
 class GridView: NSView {
 
     var zones: [WindowPosition] = []
     var highlightedIndex: Int? = nil      // index into zones[]
-    var screen: NSScreen?
 
     override var isOpaque: Bool { false }
     override var mouseDownCanMoveWindow: Bool { false }
 
-    // Visible frame expressed in view-local coordinates (view origin = screen.frame.origin).
-    private var visibleFrameInView: NSRect {
-        guard let screen = screen else { return bounds }
-        let sf = screen.frame
-        let vf = screen.visibleFrame
-        return NSRect(
-            x: vf.minX - sf.minX,
-            y: vf.minY - sf.minY,
-            width: vf.width,
-            height: vf.height
-        )
-    }
-
-    // Convert a GridCell to a rect in view-local coordinates.
+    // Convert a GridCell to a rect within the view bounds.
     func rectForCell(_ cell: GridCell) -> NSRect {
-        let vfv = visibleFrameInView
-        let cellW = vfv.width  / CGFloat(GRID_COLS)
-        let cellH = vfv.height / CGFloat(GRID_ROWS)
-        let x = vfv.minX + CGFloat(cell.col) * cellW
-        let y = vfv.minY + CGFloat(GRID_ROWS - cell.row - cell.rowSpan) * cellH
+        let cellW = bounds.width  / CGFloat(GRID_COLS)
+        let cellH = bounds.height / CGFloat(GRID_ROWS)
+        let x = CGFloat(cell.col) * cellW
+        let y = CGFloat(GRID_ROWS - cell.row - cell.rowSpan) * cellH
         let w = CGFloat(cell.colSpan) * cellW
         let h = CGFloat(cell.rowSpan) * cellH
         return NSRect(x: x, y: y, width: w, height: h)
@@ -54,70 +38,47 @@ class GridView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
-        // ── Semi-transparent background ──────────────────────────────────────
-        NSColor(white: 0, alpha: 0.45).setFill()
+        // ── Background ─────────────────────────────────────────────────────
+        NSColor(white: 0.1, alpha: 0.85).setFill()
         bounds.fill()
 
         guard !zones.isEmpty else { return }
 
+        let insetPx: CGFloat = 2
+
         // ── Draw each zone ──────────────────────────────────────────────────
         for (i, zone) in zones.enumerated() {
             let rect = rectForCell(zone.cell)
-            let inset = rect.insetBy(dx: 4, dy: 4)
+            let inset = rect.insetBy(dx: insetPx, dy: insetPx)
             let isActive = (highlightedIndex == i)
             let color = GridView.zoneColors[i % GridView.zoneColors.count]
+            let cornerR: CGFloat = 4
 
             // Fill
-            let fillAlpha: CGFloat = isActive ? 0.40 : 0.15
+            let fillAlpha: CGFloat = isActive ? 0.50 : 0.15
             color.withAlphaComponent(fillAlpha).setFill()
-            NSBezierPath(roundedRect: inset, xRadius: 8, yRadius: 8).fill()
+            NSBezierPath(roundedRect: inset, xRadius: cornerR, yRadius: cornerR).fill()
 
             // Border
-            let borderAlpha: CGFloat = isActive ? 0.95 : 0.50
-            let borderWidth: CGFloat = isActive ? 3.0 : 1.5
+            let borderAlpha: CGFloat = isActive ? 0.95 : 0.45
+            let borderWidth: CGFloat = isActive ? 2.0 : 1.0
             color.withAlphaComponent(borderAlpha).setStroke()
-            let borderPath = NSBezierPath(roundedRect: inset, xRadius: 8, yRadius: 8)
+            let borderPath = NSBezierPath(roundedRect: inset, xRadius: cornerR, yRadius: cornerR)
             borderPath.lineWidth = borderWidth
             borderPath.stroke()
 
-            // ── Labels ──────────────────────────────────────────────────────
-
-            let shadow = NSShadow()
-            shadow.shadowColor = NSColor(white: 0, alpha: 0.7)
-            shadow.shadowBlurRadius = 3
-            shadow.shadowOffset = NSSize(width: 0, height: -1)
-
-            // Order number — large
-            let numAttrs: [NSAttributedString.Key: Any] = [
-                .foregroundColor: NSColor.white.withAlphaComponent(isActive ? 1.0 : 0.7),
-                .font: NSFont.monospacedDigitSystemFont(ofSize: max(24, rect.height * 0.25), weight: .bold),
-                .shadow: shadow,
+            // ── Label: zone number ──────────────────────────────────────────
+            let fontSize: CGFloat = max(9, min(rect.height * 0.35, 14))
+            let attrs: [NSAttributedString.Key: Any] = [
+                .foregroundColor: NSColor.white.withAlphaComponent(isActive ? 1.0 : 0.6),
+                .font: NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .semibold),
             ]
             let numStr = "\(i + 1)" as NSString
-            let numSize = numStr.size(withAttributes: numAttrs)
-
-            // Zone name — smaller
-            let nameAttrs: [NSAttributedString.Key: Any] = [
-                .foregroundColor: NSColor.white.withAlphaComponent(isActive ? 0.95 : 0.6),
-                .font: NSFont.systemFont(ofSize: max(11, rect.height * 0.10), weight: .medium),
-                .shadow: shadow,
-            ]
-            let nameStr = zone.name as NSString
-            let nameSize = nameStr.size(withAttributes: nameAttrs)
-
-            // Stack number above name, centered
-            let totalH = numSize.height + 2 + nameSize.height
-            let baseY = rect.midY - totalH / 2
-
+            let numSize = numStr.size(withAttributes: attrs)
             numStr.draw(at: NSPoint(
                 x: rect.midX - numSize.width / 2,
-                y: baseY + nameSize.height + 2
-            ), withAttributes: numAttrs)
-
-            nameStr.draw(at: NSPoint(
-                x: rect.midX - nameSize.width / 2,
-                y: baseY
-            ), withAttributes: nameAttrs)
+                y: rect.midY - numSize.height / 2
+            ), withAttributes: attrs)
         }
     }
 }
