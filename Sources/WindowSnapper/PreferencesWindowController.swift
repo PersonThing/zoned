@@ -137,7 +137,7 @@ class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         mainStack.addArrangedSubview(fullScreenOverlayCheck)
 
         // ── Restore Defaults ─────────────────────────────────────────────
-        mainStack.addArrangedSubview(spacer(12))
+        mainStack.addArrangedSubview(spacer(4))
 
         let restoreBtn = NSButton(title: "Restore Defaults", target: self, action: #selector(restoreDefaults))
         restoreBtn.bezelStyle = .rounded

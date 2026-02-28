@@ -34,6 +34,11 @@ class EventMonitor {
     private var lastHighlightedScreen: NSScreen?
     private var shiftDragOverlayShown = false
 
+    // Drag overlap cycling (for zones sharing the same center)
+    private var dragHOverlapGroup: [Int] = []
+    private var dragHOverlapCycleIdx: Int = 0
+    private var dragLastVIdx: Int?
+
     init(windowManager: WindowManager, gridOverlay: GridOverlayController) {
         self.windowManager = windowManager
         self.gridOverlay   = gridOverlay
@@ -170,6 +175,15 @@ class EventMonitor {
         // Pass through when preferences window is capturing keys
         if PreferencesWindowController.isActive { return false }
 
+        // During drag: F cycles overlapping zones at the same center
+        if shiftDragOverlayShown {
+            let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
+            if keyCode == kVK_ANSI_F {
+                DispatchQueue.main.async { self.cycleDragOverlap() }
+                return true
+            }
+        }
+
         let settings = KeyBindingSettings.shared
         guard settings.cyclingModifier.matchesExactly(event.flags) else { return false }
 
@@ -222,9 +236,23 @@ class EventMonitor {
             // Find nearest H and V zones independently
             let hIdx = self.windowManager.nearestHorizontalZone(to: loc, on: screen)
             let vIdx = self.windowManager.nearestVerticalZone(to: loc, on: screen)
+            self.dragLastVIdx = vIdx
 
-            // Compose snap target from nearest H + V
-            if let hi = hIdx, let vi = vIdx {
+            // Resolve overlap group for H zone
+            var effectiveHIdx = hIdx
+            if let hi = hIdx {
+                let newGroup = self.windowManager.horizontalOverlapGroup(at: hi, on: screen)
+                if newGroup != self.dragHOverlapGroup {
+                    self.dragHOverlapGroup = newGroup
+                    self.dragHOverlapCycleIdx = 0
+                }
+                if !self.dragHOverlapGroup.isEmpty {
+                    effectiveHIdx = self.dragHOverlapGroup[self.dragHOverlapCycleIdx]
+                }
+            }
+
+            // Compose snap target from H + V
+            if let hi = effectiveHIdx, let vi = vIdx {
                 let hZones = horizontalZoneRegistry.zones(for: screen)
                 let vZones = verticalZoneRegistry.zones(for: screen)
                 let composed = GridCell(
@@ -235,7 +263,7 @@ class EventMonitor {
                 self.lastHighlightedScreen = screen
             }
 
-            self.gridOverlay.updateHighlight(horizontalIndex: hIdx, verticalIndex: vIdx)
+            self.gridOverlay.updateHighlight(horizontalIndex: effectiveHIdx, verticalIndex: vIdx)
         }
     }
 
@@ -257,6 +285,27 @@ class EventMonitor {
         }
     }
 
+    private func cycleDragOverlap() {
+        guard dragHOverlapGroup.count > 1,
+              let screen = lastHighlightedScreen else { return }
+
+        dragHOverlapCycleIdx = (dragHOverlapCycleIdx + 1) % dragHOverlapGroup.count
+        let hIdx = dragHOverlapGroup[dragHOverlapCycleIdx]
+
+        let hZones = horizontalZoneRegistry.zones(for: screen)
+        let vZones = verticalZoneRegistry.zones(for: screen)
+
+        if let vi = dragLastVIdx, vi < vZones.count, hIdx < hZones.count {
+            let composed = GridCell(
+                col: hZones[hIdx].cell.col, row: vZones[vi].cell.row,
+                colSpan: hZones[hIdx].cell.colSpan, rowSpan: vZones[vi].cell.rowSpan
+            )
+            lastHighlightedPosition = WindowPosition(name: "drag", cell: composed)
+        }
+
+        gridOverlay.updateHighlight(horizontalIndex: hIdx, verticalIndex: dragLastVIdx)
+    }
+
     private func cancelShiftDrag() {
         if shiftDragOverlayShown {
             gridOverlay.hide()
@@ -267,6 +316,9 @@ class EventMonitor {
         mouseDownPoint = nil
         lastHighlightedPosition = nil
         lastHighlightedScreen = nil
+        dragHOverlapGroup = []
+        dragHOverlapCycleIdx = 0
+        dragLastVIdx = nil
     }
 
     // MARK: - Horizontal Zones (⌃⌥← / ⌃⌥→)

@@ -175,17 +175,41 @@ class WindowManager {
     }
 
     /// Returns the index of the horizontal zone whose center x is nearest to `cgPoint.x`.
+    /// Among zones with the same center distance, prefers the smallest (by colSpan).
     func nearestHorizontalZone(to cgPoint: CGPoint, on screen: NSScreen) -> Int? {
         let zones = horizontalZoneRegistry.zones(for: screen)
         guard !zones.isEmpty else { return nil }
         var bestIdx = 0
         var bestDist = CGFloat.greatestFiniteMagnitude
+        var bestSpan = Int.max
         for (i, zone) in zones.enumerated() {
             let frame = frameForCell(zone.cell, on: screen)
             let dist = abs(cgPoint.x - frame.midX)
-            if dist < bestDist { bestDist = dist; bestIdx = i }
+            if dist < bestDist - 1.0 {
+                bestDist = dist; bestIdx = i; bestSpan = zone.cell.colSpan
+            } else if dist < bestDist + 1.0 && zone.cell.colSpan < bestSpan {
+                bestDist = dist; bestIdx = i; bestSpan = zone.cell.colSpan
+            }
         }
         return bestIdx
+    }
+
+    /// Returns indices of horizontal zones sharing the same center X as zone at `index`,
+    /// sorted by colSpan ascending (smallest first).
+    func horizontalOverlapGroup(at index: Int, on screen: NSScreen) -> [Int] {
+        let zones = horizontalZoneRegistry.zones(for: screen)
+        guard index < zones.count else { return [] }
+        let refFrame = frameForCell(zones[index].cell, on: screen)
+        let refCenterX = refFrame.midX
+        var group: [(idx: Int, span: Int)] = []
+        for (i, zone) in zones.enumerated() {
+            let frame = frameForCell(zone.cell, on: screen)
+            if abs(frame.midX - refCenterX) < 1.0 {
+                group.append((i, zone.cell.colSpan))
+            }
+        }
+        group.sort { $0.span < $1.span }
+        return group.map { $0.idx }
     }
 
     /// Returns the index of the vertical zone whose center y is nearest to `cgPoint.y`.
