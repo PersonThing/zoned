@@ -1,7 +1,15 @@
 import AppKit
 import ApplicationServices
 
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ wid: inout CGWindowID) -> AXError
+
 class WindowManager {
+
+    func windowID(for window: AXUIElement) -> CGWindowID? {
+        var wid: CGWindowID = 0
+        return _AXUIElementGetWindow(window, &wid) == .success ? wid : nil
+    }
 
     // MARK: - AX Window Operations
 
@@ -164,6 +172,34 @@ class WindowManager {
         }
 
         return (bestIdx, zones[bestIdx])
+    }
+
+    /// Returns the index of the horizontal zone whose center x is nearest to `cgPoint.x`.
+    func nearestHorizontalZone(to cgPoint: CGPoint, on screen: NSScreen) -> Int? {
+        let zones = horizontalZoneRegistry.zones(for: screen)
+        guard !zones.isEmpty else { return nil }
+        var bestIdx = 0
+        var bestDist = CGFloat.greatestFiniteMagnitude
+        for (i, zone) in zones.enumerated() {
+            let frame = frameForCell(zone.cell, on: screen)
+            let dist = abs(cgPoint.x - frame.midX)
+            if dist < bestDist { bestDist = dist; bestIdx = i }
+        }
+        return bestIdx
+    }
+
+    /// Returns the index of the vertical zone whose center y is nearest to `cgPoint.y`.
+    func nearestVerticalZone(to cgPoint: CGPoint, on screen: NSScreen) -> Int? {
+        let zones = verticalZoneRegistry.zones(for: screen)
+        guard !zones.isEmpty else { return nil }
+        var bestIdx = 0
+        var bestDist = CGFloat.greatestFiniteMagnitude
+        for (i, zone) in zones.enumerated() {
+            let frame = frameForCell(zone.cell, on: screen)
+            let dist = abs(cgPoint.y - frame.midY)
+            if dist < bestDist { bestDist = dist; bestIdx = i }
+        }
+        return bestIdx
     }
 
     func screenFor(window: AXUIElement) -> NSScreen? {

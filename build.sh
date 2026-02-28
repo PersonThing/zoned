@@ -19,6 +19,10 @@ APP_DIR="$BUILD_DIR/$APP_NAME.app/Contents"
 SOURCES=(
     Sources/WindowSnapper/main.swift
     Sources/WindowSnapper/Models.swift
+    Sources/WindowSnapper/KeyCodeMapping.swift
+    Sources/WindowSnapper/KeyBindingSettings.swift
+    Sources/WindowSnapper/KeyRecorderView.swift
+    Sources/WindowSnapper/PreferencesWindowController.swift
     Sources/WindowSnapper/WindowManager.swift
     Sources/WindowSnapper/GridView.swift
     Sources/WindowSnapper/GridOverlay.swift

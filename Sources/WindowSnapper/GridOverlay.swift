@@ -1,7 +1,8 @@
 import AppKit
 
-// Manages a small floating preview panel that shows the zone layout in miniature.
-// The panel is centered on the active screen and ignores mouse events.
+// Manages a small floating preview panel that shows horizontal zones with
+// vertical subdivisions inside the active one. The panel is centered on
+// the active screen and ignores mouse events.
 class GridOverlayController {
 
     private struct ScreenPanel {
@@ -13,35 +14,44 @@ class GridOverlayController {
     private var panels: [ScreenPanel] = []
     private(set) var isVisible = false
 
-    /// Preview panel is ~15% of screen width, aspect-matched to the screen.
     private static let previewScale: CGFloat = 0.15
 
     // MARK: - Show / Hide
 
-    /// Show the overlay. If `onScreen` is provided, show only on that screen;
-    /// otherwise show on all screens.
-    func show(on onScreen: NSScreen? = nil) {
+    /// Show the overlay on `screen`, displaying all horizontal zones and
+    /// vertical subdivisions inside the active horizontal zone.
+    func show(on screen: NSScreen, activeHorizontalIndex: Int? = nil, activeVerticalIndex: Int? = nil) {
         guard !isVisible else { return }
         isVisible = true
 
-        let screens = onScreen.map { [$0] } ?? NSScreen.screens
-        debugLog("overlay show: \(screens.count) screen(s)")
+        let fullScreen = KeyBindingSettings.shared.fullScreenOverlay
+        let vf = screen.visibleFrame
+        let panelFrame: NSRect
 
-        for screen in screens {
-            let panel = makePanel(for: screen)
-            let gridView = panel.contentView as! GridView
-            gridView.zones = zoneRegistry.zones(for: screen)
-            panels.append(ScreenPanel(screen: screen, panel: panel, gridView: gridView))
-            panel.alphaValue = 0
-            panel.orderFront(nil)
+        if fullScreen {
+            panelFrame = vf
+        } else {
+            let previewW = round(vf.width * Self.previewScale)
+            let previewH = round(vf.height * Self.previewScale) + GridView.instructionHeight
+            let panelX = vf.midX - previewW / 2
+            let panelY = vf.midY - previewH / 2
+            panelFrame = NSRect(x: panelX, y: panelY, width: previewW, height: previewH)
         }
 
-        // Fade in
+        let panel = makePanel(frame: panelFrame, fullScreen: fullScreen)
+        let gridView = panel.contentView as! GridView
+        gridView.horizontalZones = horizontalZoneRegistry.zones(for: screen)
+        gridView.verticalZones = verticalZoneRegistry.zones(for: screen)
+        gridView.activeHorizontalIndex = activeHorizontalIndex
+        gridView.activeVerticalIndex = activeVerticalIndex
+        gridView.isFullScreen = fullScreen
+        panels.append(ScreenPanel(screen: screen, panel: panel, gridView: gridView))
+        panel.alphaValue = 0
+        panel.orderFront(nil)
+
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.15
-            for sp in panels {
-                sp.panel.animator().alphaValue = 1.0
-            }
+            panel.animator().alphaValue = 1.0
         }
     }
 
@@ -52,7 +62,6 @@ class GridOverlayController {
         let panelsToRemove = panels
         panels.removeAll()
 
-        // Fade out
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.10
             for sp in panelsToRemove {
@@ -65,44 +74,19 @@ class GridOverlayController {
 
     // MARK: - Highlight
 
-    /// Highlight a zone by index on the given screen. Pass nil to clear.
-    func highlightZone(index: Int?, on activeScreen: NSScreen) {
+    func updateHighlight(horizontalIndex: Int?, verticalIndex: Int?) {
         for sp in panels {
-            if sp.screen == activeScreen {
-                sp.gridView.highlightedIndex = index
-            } else {
-                sp.gridView.highlightedIndex = nil
-            }
-            sp.gridView.needsDisplay = true
-        }
-    }
-
-    /// Highlight a zone by matching a WindowPosition on the given screen.
-    func highlightZone(_ position: WindowPosition?, on activeScreen: NSScreen) {
-        for sp in panels {
-            if sp.screen == activeScreen, let pos = position {
-                sp.gridView.highlightedIndex = sp.gridView.zones.firstIndex(of: pos)
-            } else {
-                sp.gridView.highlightedIndex = nil
-            }
+            sp.gridView.activeHorizontalIndex = horizontalIndex
+            sp.gridView.activeVerticalIndex = verticalIndex
             sp.gridView.needsDisplay = true
         }
     }
 
     // MARK: - Panel Construction
 
-    private func makePanel(for screen: NSScreen) -> NSPanel {
-        let vf = screen.visibleFrame
-        let previewW = round(vf.width * Self.previewScale)
-        let previewH = round(vf.height * Self.previewScale)
-
-        // Center on the screen's visible frame (AppKit coordinates)
-        let panelX = vf.midX - previewW / 2
-        let panelY = vf.midY - previewH / 2
-        let panelFrame = NSRect(x: panelX, y: panelY, width: previewW, height: previewH)
-
+    private func makePanel(frame: NSRect, fullScreen: Bool = false) -> NSPanel {
         let panel = NSPanel(
-            contentRect: panelFrame,
+            contentRect: frame,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -114,11 +98,11 @@ class GridOverlayController {
         panel.ignoresMouseEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
-        panel.setFrame(panelFrame, display: false)
+        panel.setFrame(frame, display: false)
 
-        let gridView = GridView(frame: NSRect(origin: .zero, size: panelFrame.size))
+        let gridView = GridView(frame: NSRect(origin: .zero, size: frame.size))
         gridView.wantsLayer = true
-        gridView.layer?.cornerRadius = 10
+        gridView.layer?.cornerRadius = fullScreen ? 0 : 10
         gridView.layer?.masksToBounds = true
         panel.contentView = gridView
 

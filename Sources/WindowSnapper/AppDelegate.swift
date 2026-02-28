@@ -6,6 +6,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowManager: WindowManager?
     private var gridOverlay: GridOverlayController?
     private var eventMonitor: EventMonitor?
+    private var preferencesWindowController: PreferencesWindowController?
+    private var hotkeyMenuItems: [NSMenuItem] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         debugLog("applicationDidFinishLaunching")
@@ -21,6 +23,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         gridOverlay   = GridOverlayController()
         eventMonitor  = EventMonitor(windowManager: windowManager!, gridOverlay: gridOverlay!)
         eventMonitor?.start()
+
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(settingsDidChange),
+            name: KeyBindingSettings.didChangeNotification, object: nil
+        )
     }
 
     // MARK: - Status Bar
@@ -41,14 +48,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        for label in ["⌃⌥↑ — full screen", "⌃⌥→ — next zone", "⌃⌥← — prev zone"] {
-            let item = NSMenuItem(title: label, action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
-        }
+        hotkeyMenuItems = buildHotkeyItems()
+        for item in hotkeyMenuItems { menu.addItem(item) }
 
         menu.addItem(NSMenuItem.separator())
 
+        menu.addItem(NSMenuItem(title: "Preferences…",
+                                action: #selector(showPreferences),
+                                keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "About WindowSnapper",
                                 action: #selector(showAbout),
                                 keyEquivalent: ""))
@@ -59,17 +66,59 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = menu
     }
 
+    @objc private func showPreferences() {
+        if preferencesWindowController == nil {
+            preferencesWindowController = PreferencesWindowController()
+        }
+        preferencesWindowController?.showWindow(nil)
+        preferencesWindowController?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     @objc private func showAbout() {
+        let s = KeyBindingSettings.shared
+        let mod = s.cyclingModifier.displayString
         let alert = NSAlert()
         alert.messageText = "WindowSnapper v0"
         alert.informativeText = """
         A minimal macOS window manager.
 
-        ⌃⌥↑  Full screen on current monitor
-        ⌃⌥→  Next zone (wraps across monitors)
-        ⌃⌥←  Previous zone (wraps across monitors)
+        \(mod)\(s.prevHorizontalKeyName)/\(s.nextHorizontalKeyName)  Cycle horizontal zones
+        \(mod)\(s.prevVerticalKeyName)/\(s.nextVerticalKeyName)  Cycle vertical zones
+        \(s.dragModifier.displayString)+drag  Snap window to zone
         """
         alert.runModal()
+    }
+
+    @objc private func settingsDidChange() {
+        refreshHotkeyItems()
+    }
+
+    private func buildHotkeyItems() -> [NSMenuItem] {
+        let s = KeyBindingSettings.shared
+        let mod = s.cyclingModifier.displayString
+        let labels = [
+            "\(mod)\(s.prevHorizontalKeyName)/\(s.nextHorizontalKeyName) — horizontal zones",
+            "\(mod)\(s.prevVerticalKeyName)/\(s.nextVerticalKeyName) — vertical zones",
+            "\(s.dragModifier.displayString)+drag — snap window",
+        ]
+        return labels.map { label in
+            let item = NSMenuItem(title: label, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            return item
+        }
+    }
+
+    private func refreshHotkeyItems() {
+        guard let menu = statusItem?.menu else { return }
+        // Remove old hotkey items
+        for item in hotkeyMenuItems { menu.removeItem(item) }
+        // Build new items and insert at the same position (after header + separator)
+        hotkeyMenuItems = buildHotkeyItems()
+        let insertIdx = 2 // after header and separator
+        for (i, item) in hotkeyMenuItems.enumerated() {
+            menu.insertItem(item, at: insertIdx + i)
+        }
     }
 
     // MARK: - Permissions
