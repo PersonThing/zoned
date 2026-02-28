@@ -24,10 +24,12 @@ class EventMonitor {
     private var auxTapSource: CFRunLoopSource?
 
     // Tracks the last-applied zone index per display (keyed by CGDirectDisplayID).
-    private var lastZoneIndex: [UInt32: Int] = [:]
+    private var lastHorizontalZoneIndex: [UInt32: Int] = [:]
+    private var lastVerticalZoneIndex: [UInt32: Int] = [:]
 
     // Modifier overlay state
     private var ctrlOptHeld = false
+    private var overlayScreen: NSScreen?   // which screen the overlay is currently on
 
     // Shift+drag state
     private var isShiftHeld = false
@@ -160,19 +162,18 @@ class EventMonitor {
         if ctrlOptHeld && !wasHeld {
             debugLog("⌃⌥ held — showing overlay")
             DispatchQueue.main.async {
-                if !self.gridOverlay.isVisible {
-                    // Show overlay on the focused window's screen
-                    let screen: NSScreen? = {
-                        guard let win = self.windowManager.focusedWindow() else { return nil }
-                        return self.windowManager.screenFor(window: win)
-                    }()
-                    self.gridOverlay.show(on: screen)
+                if let win = self.windowManager.focusedWindow(),
+                   let screen = self.windowManager.screenFor(window: win) {
+                    self.ensureOverlay(on: screen)
+                } else if !self.gridOverlay.isVisible {
+                    self.gridOverlay.show()
+                    self.overlayScreen = nil
                 }
                 self.highlightCurrentZone()
             }
         } else if !ctrlOptHeld && wasHeld && !shiftDragOverlayShown {
             debugLog("⌃⌥ released — hiding overlay")
-            DispatchQueue.main.async { self.gridOverlay.hide() }
+            DispatchQueue.main.async { self.gridOverlay.hide(); self.overlayScreen = nil }
         }
 
         // ── Shift tracking for drag ─────────────────────────────────────────
@@ -199,14 +200,17 @@ class EventMonitor {
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
 
         switch Int(keyCode) {
-        case kVK_UpArrow:
-            handleFullScreen()
-            return true
         case kVK_RightArrow:
-            handleNextZone()
+            handleNextHorizontalZone()
             return true
         case kVK_LeftArrow:
-            handlePrevZone()
+            handlePrevHorizontalZone()
+            return true
+        case kVK_DownArrow:
+            handleNextVerticalZone()
+            return true
+        case kVK_UpArrow:
+            handlePrevVerticalZone()
             return true
         default:
             return false
@@ -240,10 +244,8 @@ class EventMonitor {
             guard let screen = self.windowManager.screenContaining(cgPoint: loc)
             else { return }
 
-            if !self.gridOverlay.isVisible {
-                self.gridOverlay.show(on: screen)
-                self.shiftDragOverlayShown = true
-            }
+            self.ensureOverlay(on: screen)
+            self.shiftDragOverlayShown = true
 
             guard let (idx, zone) = self.windowManager.nearestZone(to: loc, on: screen)
             else { return }
@@ -275,6 +277,7 @@ class EventMonitor {
         if shiftDragOverlayShown {
             gridOverlay.hide()
             shiftDragOverlayShown = false
+            overlayScreen = nil
         }
         draggedWindow = nil
         mouseDownPoint = nil
@@ -282,26 +285,80 @@ class EventMonitor {
         lastHighlightedScreen = nil
     }
 
-    // MARK: - Full Screen (⌃⌥↑)
+    // MARK: - Horizontal Zones (⌃⌥← / ⌃⌥→)
 
-    private func handleFullScreen() {
-        guard let window = windowManager.focusedWindow(),
-              let screen = windowManager.screenFor(window: window)
-        else { return }
-
-        let frame = windowManager.frameForCell(fullScreenZone.cell, on: screen)
-        windowManager.setWindowFrame(window, frame: frame)
-
-        if let did = displayID(for: screen) {
-            lastZoneIndex.removeValue(forKey: did)
-        }
-
-        DispatchQueue.main.async { self.highlightCurrentZone() }
+    private func handleNextHorizontalZone() {
+        cycleZone(
+            registry: horizontalZoneRegistry,
+            indexMap: &lastHorizontalZoneIndex,
+            axis: .horizontal,
+            direction: .forward
+        )
     }
 
-    // MARK: - Next Zone (⌃⌥→)
+    private func handlePrevHorizontalZone() {
+        cycleZone(
+            registry: horizontalZoneRegistry,
+            indexMap: &lastHorizontalZoneIndex,
+            axis: .horizontal,
+            direction: .backward
+        )
+    }
 
-    private func handleNextZone() {
+    // MARK: - Vertical Zones (⌃⌥↑ / ⌃⌥↓)
+
+    private func handlePrevVerticalZone() {
+        cycleZone(
+            registry: verticalZoneRegistry,
+            indexMap: &lastVerticalZoneIndex,
+            axis: .vertical,
+            direction: .backward,
+            wrapAcrossScreens: false
+        )
+    }
+
+    private func handleNextVerticalZone() {
+        cycleZone(
+            registry: verticalZoneRegistry,
+            indexMap: &lastVerticalZoneIndex,
+            axis: .vertical,
+            direction: .forward,
+            wrapAcrossScreens: false
+        )
+    }
+
+    // MARK: - Generic Zone Cycling
+
+    private enum CycleDirection { case forward, backward }
+    private enum Axis { case horizontal, vertical }
+
+    /// Returns the current horizontal GridCell state for a screen (defaults to full width).
+    private func currentHorizontalCell(for screen: NSScreen) -> GridCell {
+        guard let did = displayID(for: screen),
+              let idx = lastHorizontalZoneIndex[did]
+        else { return GridCell(col: 0, row: 0, colSpan: GRID_COLS, rowSpan: GRID_ROWS) }
+        let zones = horizontalZoneRegistry.zones(for: screen)
+        guard idx < zones.count else { return GridCell(col: 0, row: 0, colSpan: GRID_COLS, rowSpan: GRID_ROWS) }
+        return zones[idx].cell
+    }
+
+    /// Returns the current vertical GridCell state for a screen (defaults to full height).
+    private func currentVerticalCell(for screen: NSScreen) -> GridCell {
+        guard let did = displayID(for: screen),
+              let idx = lastVerticalZoneIndex[did]
+        else { return GridCell(col: 0, row: 0, colSpan: GRID_COLS, rowSpan: GRID_ROWS) }
+        let zones = verticalZoneRegistry.zones(for: screen)
+        guard idx < zones.count else { return GridCell(col: 0, row: 0, colSpan: GRID_COLS, rowSpan: GRID_ROWS) }
+        return zones[idx].cell
+    }
+
+    private func cycleZone(
+        registry: ZoneRegistry,
+        indexMap: inout [UInt32: Int],
+        axis: Axis,
+        direction: CycleDirection,
+        wrapAcrossScreens: Bool = true
+    ) {
         guard let window = windowManager.focusedWindow(),
               let currentScreen = windowManager.screenFor(window: window)
         else { return }
@@ -312,87 +369,112 @@ class EventMonitor {
         let currentScreenIdx = screens.firstIndex(of: currentScreen) ?? 0
         var screenIdx = currentScreenIdx
         var screen = screens[screenIdx]
-        var zones = zoneRegistry.zones(for: screen)
+        var zones = registry.zones(for: screen)
         let did = displayID(for: screen) ?? 0
 
-        var zoneIdx = (lastZoneIndex[did] ?? -1) + 1
-
-        if zoneIdx >= zones.count {
-            screenIdx = (screenIdx + 1) % screens.count
-            screen = screens[screenIdx]
-            zones = zoneRegistry.zones(for: screen)
-            zoneIdx = 0
-        }
-
-        guard !zones.isEmpty else { return }
-
-        let zone = zones[zoneIdx]
-        let frame = windowManager.frameForCell(zone.cell, on: screen)
-        windowManager.setWindowFrame(window, frame: frame)
-
-        let newDid = displayID(for: screen) ?? 0
-        lastZoneIndex[newDid] = zoneIdx
-
-        DispatchQueue.main.async {
-            self.gridOverlay.highlightZone(index: zoneIdx, on: screen)
-        }
-    }
-
-    // MARK: - Previous Zone (⌃⌥←)
-
-    private func handlePrevZone() {
-        guard let window = windowManager.focusedWindow(),
-              let currentScreen = windowManager.screenFor(window: window)
-        else { return }
-
-        let screens = sortedScreens()
-        guard !screens.isEmpty else { return }
-
-        let currentScreenIdx = screens.firstIndex(of: currentScreen) ?? 0
-        var screenIdx = currentScreenIdx
-        var screen = screens[screenIdx]
-        var zones = zoneRegistry.zones(for: screen)
-        let did = displayID(for: screen) ?? 0
-
-        let lastIdx = lastZoneIndex[did]
         var zoneIdx: Int
-
-        if let lastIdx = lastIdx {
-            zoneIdx = lastIdx - 1
-        } else {
-            zoneIdx = zones.count - 1
-        }
-
-        if zoneIdx < 0 {
-            screenIdx = (screenIdx - 1 + screens.count) % screens.count
-            screen = screens[screenIdx]
-            zones = zoneRegistry.zones(for: screen)
-            zoneIdx = zones.count - 1
+        switch direction {
+        case .forward:
+            zoneIdx = (indexMap[did] ?? -1) + 1
+            if zoneIdx >= zones.count {
+                if wrapAcrossScreens {
+                    screenIdx = (screenIdx + 1) % screens.count
+                    screen = screens[screenIdx]
+                    zones = registry.zones(for: screen)
+                }
+                zoneIdx = 0
+            }
+        case .backward:
+            if let lastIdx = indexMap[did] {
+                zoneIdx = lastIdx - 1
+            } else {
+                zoneIdx = zones.count - 1
+            }
+            if zoneIdx < 0 {
+                if wrapAcrossScreens {
+                    screenIdx = (screenIdx - 1 + screens.count) % screens.count
+                    screen = screens[screenIdx]
+                    zones = registry.zones(for: screen)
+                }
+                zoneIdx = zones.count - 1
+            }
         }
 
         guard !zones.isEmpty else { return }
 
         let zone = zones[zoneIdx]
-        let frame = windowManager.frameForCell(zone.cell, on: screen)
+        let newDid = displayID(for: screen) ?? 0
+        indexMap[newDid] = zoneIdx
+
+        // Compose the final cell: this axis from the new zone, other axis from current state.
+        let composedCell: GridCell
+        switch axis {
+        case .horizontal:
+            let v = currentVerticalCell(for: screen)
+            composedCell = GridCell(col: zone.cell.col, row: v.row,
+                                   colSpan: zone.cell.colSpan, rowSpan: v.rowSpan)
+        case .vertical:
+            let h = currentHorizontalCell(for: screen)
+            composedCell = GridCell(col: h.col, row: zone.cell.row,
+                                   colSpan: h.colSpan, rowSpan: zone.cell.rowSpan)
+        }
+
+        let frame = windowManager.frameForCell(composedCell, on: screen)
         windowManager.setWindowFrame(window, frame: frame)
 
-        let newDid = displayID(for: screen) ?? 0
-        lastZoneIndex[newDid] = zoneIdx
+        // Find the index in the combined zoneRegistry for overlay highlighting
+        let combinedZones = zoneRegistry.zones(for: screen)
+        let overlayIdx = combinedZones.firstIndex(of: zone)
 
         DispatchQueue.main.async {
-            self.gridOverlay.highlightZone(index: zoneIdx, on: screen)
+            self.ensureOverlay(on: screen)
+            self.gridOverlay.highlightZone(index: overlayIdx, on: screen)
         }
     }
 
     // MARK: - Helpers
 
+    /// Ensure the overlay is showing on `screen`. If it's already there, no-op.
+    /// If it's on a different screen, hide and re-show.
+    private func ensureOverlay(on screen: NSScreen) {
+        if !gridOverlay.isVisible {
+            gridOverlay.show(on: screen)
+            overlayScreen = screen
+        } else if screen != overlayScreen {
+            gridOverlay.hide()
+            gridOverlay.show(on: screen)
+            overlayScreen = screen
+        }
+    }
+
     private func highlightCurrentZone() {
         guard let window = windowManager.focusedWindow(),
               let screen = windowManager.screenFor(window: window),
-              let did = displayID(for: screen),
-              let idx = lastZoneIndex[did]
+              let did = displayID(for: screen)
         else { return }
-        gridOverlay.highlightZone(index: idx, on: screen)
+
+        // Try horizontal first, then vertical
+        let hIdx = lastHorizontalZoneIndex[did]
+        let vIdx = lastVerticalZoneIndex[did]
+
+        // Find the matching zone in the combined registry for overlay highlighting
+        let combinedZones = zoneRegistry.zones(for: screen)
+        var overlayIdx: Int?
+
+        if let hi = hIdx {
+            let hZones = horizontalZoneRegistry.zones(for: screen)
+            if hi < hZones.count {
+                overlayIdx = combinedZones.firstIndex(of: hZones[hi])
+            }
+        }
+        if overlayIdx == nil, let vi = vIdx {
+            let vZones = verticalZoneRegistry.zones(for: screen)
+            if vi < vZones.count {
+                overlayIdx = combinedZones.firstIndex(of: vZones[vi])
+            }
+        }
+
+        gridOverlay.highlightZone(index: overlayIdx, on: screen)
     }
 
     private func sortedScreens() -> [NSScreen] {
