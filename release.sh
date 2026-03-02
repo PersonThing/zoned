@@ -26,6 +26,9 @@ SOURCES=(
     Sources/WindowSnapper/GridOverlay.swift
     Sources/WindowSnapper/EventMonitor.swift
     Sources/WindowSnapper/AppDelegate.swift
+    Sources/WindowSnapper/LayoutStore.swift
+    Sources/WindowSnapper/LayoutEditorWindowController.swift
+    Sources/WindowSnapper/ZoneEditorView.swift
 )
 
 # ── Clean ────────────────────────────────────────────────────────────────────

@@ -1,8 +1,7 @@
 import AppKit
 
-// Manages a small floating preview panel that shows horizontal zones with
-// vertical subdivisions inside the active one. The panel is centered on
-// the active screen and ignores mouse events.
+// Manages a small floating preview panel that shows zones.
+// The panel is centered on the active screen and ignores mouse events.
 class GridOverlayController {
 
     private struct ScreenPanel {
@@ -18,9 +17,7 @@ class GridOverlayController {
 
     // MARK: - Show / Hide
 
-    /// Show the overlay on `screen`, displaying all horizontal zones and
-    /// vertical subdivisions inside the active horizontal zone.
-    func show(on screen: NSScreen, activeHorizontalIndex: Int? = nil, activeVerticalIndex: Int? = nil) {
+    func show(on screen: NSScreen, layout: ZoneLayout, activeZoneIndex: Int? = nil) {
         guard !isVisible else { return }
         isVisible = true
 
@@ -40,10 +37,8 @@ class GridOverlayController {
 
         let panel = makePanel(frame: panelFrame, fullScreen: fullScreen)
         let gridView = panel.contentView as! GridView
-        gridView.horizontalZones = horizontalZoneRegistry.zones(for: screen)
-        gridView.verticalZones = verticalZoneRegistry.zones(for: screen)
-        gridView.activeHorizontalIndex = activeHorizontalIndex
-        gridView.activeVerticalIndex = activeVerticalIndex
+        gridView.layout = layout
+        gridView.activeZoneIndex = activeZoneIndex
         gridView.isFullScreen = fullScreen
         panels.append(ScreenPanel(screen: screen, panel: panel, gridView: gridView))
         panel.alphaValue = 0
@@ -74,10 +69,9 @@ class GridOverlayController {
 
     // MARK: - Highlight
 
-    func updateHighlight(horizontalIndex: Int?, verticalIndex: Int?) {
+    func updateHighlight(zoneIndex: Int?) {
         for sp in panels {
-            sp.gridView.activeHorizontalIndex = horizontalIndex
-            sp.gridView.activeVerticalIndex = verticalIndex
+            sp.gridView.activeZoneIndex = zoneIndex
             sp.gridView.needsDisplay = true
         }
     }

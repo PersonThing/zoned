@@ -54,21 +54,19 @@ class KeyBindingSettings {
     static let didChangeNotification = Notification.Name("KeyBindingSettingsDidChange")
 
     var cyclingModifier: ModifierSet
-    var nextHorizontalKey: Int
-    var prevHorizontalKey: Int
-    var nextVerticalKey: Int
-    var prevVerticalKey: Int
     var dragModifier: ModifierSet
     var fullScreenOverlay: Bool
+
+    // All action keys are hardcoded (not configurable)
+    let nextZoneKey   = kVK_RightArrow   // cycle to next zone
+    let prevZoneKey   = kVK_LeftArrow    // cycle to previous zone
+    let nextLayoutKey = kVK_ANSI_RightBracket  // ] cycle to next layout
+    let prevLayoutKey = kVK_ANSI_LeftBracket   // [ cycle to previous layout
 
     // MARK: Defaults
 
     static let defaultFullScreenOverlay = true
     static let defaultCyclingModifier = ModifierSet(control: true, option: true, command: false, shift: false)
-    static let defaultNextHorizontal  = kVK_RightArrow
-    static let defaultPrevHorizontal  = kVK_LeftArrow
-    static let defaultNextVertical    = kVK_DownArrow
-    static let defaultPrevVertical    = kVK_UpArrow
     static let defaultDragModifier    = ModifierSet(control: false, option: false, command: false, shift: true)
 
     // MARK: Init
@@ -82,11 +80,6 @@ class KeyBindingSettings {
             command: d.object(forKey: "kb.cycling.cmd")    as? Bool ?? Self.defaultCyclingModifier.command,
             shift:   d.object(forKey: "kb.cycling.shift")  as? Bool ?? Self.defaultCyclingModifier.shift
         )
-
-        nextHorizontalKey = d.object(forKey: "kb.nextH") as? Int ?? Self.defaultNextHorizontal
-        prevHorizontalKey = d.object(forKey: "kb.prevH") as? Int ?? Self.defaultPrevHorizontal
-        nextVerticalKey   = d.object(forKey: "kb.nextV") as? Int ?? Self.defaultNextVertical
-        prevVerticalKey   = d.object(forKey: "kb.prevV") as? Int ?? Self.defaultPrevVertical
 
         dragModifier = ModifierSet(
             control: d.object(forKey: "kb.drag.ctrl")  as? Bool ?? Self.defaultDragModifier.control,
@@ -108,11 +101,6 @@ class KeyBindingSettings {
         d.set(cyclingModifier.command, forKey: "kb.cycling.cmd")
         d.set(cyclingModifier.shift,   forKey: "kb.cycling.shift")
 
-        d.set(nextHorizontalKey, forKey: "kb.nextH")
-        d.set(prevHorizontalKey, forKey: "kb.prevH")
-        d.set(nextVerticalKey,   forKey: "kb.nextV")
-        d.set(prevVerticalKey,   forKey: "kb.prevV")
-
         d.set(dragModifier.control, forKey: "kb.drag.ctrl")
         d.set(dragModifier.option,  forKey: "kb.drag.opt")
         d.set(dragModifier.command, forKey: "kb.drag.cmd")
@@ -125,19 +113,8 @@ class KeyBindingSettings {
 
     func resetToDefaults() {
         cyclingModifier   = Self.defaultCyclingModifier
-        nextHorizontalKey = Self.defaultNextHorizontal
-        prevHorizontalKey = Self.defaultPrevHorizontal
-        nextVerticalKey   = Self.defaultNextVertical
-        prevVerticalKey   = Self.defaultPrevVertical
         dragModifier      = Self.defaultDragModifier
         fullScreenOverlay = Self.defaultFullScreenOverlay
         save()
     }
-
-    // MARK: Display Helpers
-
-    var nextHorizontalKeyName: String { displayNameForKeyCode(nextHorizontalKey) }
-    var prevHorizontalKeyName: String { displayNameForKeyCode(prevHorizontalKey) }
-    var nextVerticalKeyName: String   { displayNameForKeyCode(nextVerticalKey) }
-    var prevVerticalKeyName: String   { displayNameForKeyCode(prevVerticalKey) }
 }

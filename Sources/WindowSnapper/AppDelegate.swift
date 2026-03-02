@@ -7,6 +7,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var gridOverlay: GridOverlayController?
     private var eventMonitor: EventMonitor?
     private var preferencesWindowController: PreferencesWindowController?
+    private var layoutEditorWindowController: LayoutEditorWindowController?
     private var hotkeyMenuItems: [NSMenuItem] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -27,6 +28,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(
             self, selector: #selector(settingsDidChange),
             name: KeyBindingSettings.didChangeNotification, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(openLayoutEditor),
+            name: Notification.Name("OpenLayoutEditor"), object: nil
         )
     }
 
@@ -53,6 +58,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
+        menu.addItem(NSMenuItem(title: "Edit Layouts…",
+                                action: #selector(openLayoutEditor),
+                                keyEquivalent: "l"))
         menu.addItem(NSMenuItem(title: "Preferences…",
                                 action: #selector(showPreferences),
                                 keyEquivalent: ","))
@@ -75,6 +83,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    @objc private func openLayoutEditor(_ sender: Any? = nil) {
+        if layoutEditorWindowController == nil {
+            layoutEditorWindowController = LayoutEditorWindowController()
+        }
+        layoutEditorWindowController?.showWindow(nil)
+        layoutEditorWindowController?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     @objc private func showAbout() {
         let s = KeyBindingSettings.shared
         let mod = s.cyclingModifier.displayString
@@ -83,8 +100,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = """
         A minimal macOS window manager.
 
-        \(mod)\(s.prevHorizontalKeyName)/\(s.nextHorizontalKeyName)  Cycle horizontal zones
-        \(mod)\(s.prevVerticalKeyName)/\(s.nextVerticalKeyName)  Cycle vertical zones
+        \(mod)←/→  Cycle zones
+        \(mod)[/]  Cycle layouts
         \(s.dragModifier.displayString)+drag  Snap window to zone
         """
         alert.runModal()
@@ -98,8 +115,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let s = KeyBindingSettings.shared
         let mod = s.cyclingModifier.displayString
         let labels = [
-            "\(mod)\(s.prevHorizontalKeyName)/\(s.nextHorizontalKeyName) — horizontal zones",
-            "\(mod)\(s.prevVerticalKeyName)/\(s.nextVerticalKeyName) — vertical zones",
+            "\(mod)←/→ — cycle zones",
+            "\(mod)[/] — cycle layouts",
             "\(s.dragModifier.displayString)+drag — snap window",
         ]
         return labels.map { label in

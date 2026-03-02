@@ -1,14 +1,11 @@
 import AppKit
 
 // NSView that renders zone layout in miniature.
-// Shows all horizontal zones, vertical subdivisions inside the active one,
-// and hotkey instructions at the bottom.
+// Shows all zones and highlights the active one.
 class GridView: NSView {
 
-    var horizontalZones: [WindowPosition] = []
-    var activeHorizontalIndex: Int? = nil
-    var verticalZones: [WindowPosition] = []
-    var activeVerticalIndex: Int? = nil
+    var layout: ZoneLayout?
+    var activeZoneIndex: Int? = nil
     var isFullScreen: Bool = false
 
     static let instructionHeight: CGFloat = 18
@@ -38,8 +35,8 @@ class GridView: NSView {
         return NSRect(x: x, y: y, width: w, height: h)
     }
 
-    // Muted color palette for horizontal zones.
-    private static let zoneColors: [NSColor] = [
+    // Muted color palette for zones.
+    static let zoneColors: [NSColor] = [
         NSColor(red: 0.20, green: 0.55, blue: 0.85, alpha: 1.0),
         NSColor(red: 0.30, green: 0.70, blue: 0.45, alpha: 1.0),
         NSColor(red: 0.75, green: 0.50, blue: 0.20, alpha: 1.0),
@@ -61,15 +58,18 @@ class GridView: NSView {
         bounds.fill()
 
         let gb = gridBounds
-        guard !horizontalZones.isEmpty else { return }
+        guard let layout = layout else { return }
+        let zones = layout.sortedZones
+        guard !zones.isEmpty else { return }
 
         let insetPx: CGFloat = isFullScreen ? 4 : 1.5
         let cornerR: CGFloat = isFullScreen ? 8 : 3
 
-        // ── Horizontal zones ───────────────────────────────────────────────
-        for (i, zone) in horizontalZones.enumerated() {
-            let isActive = (activeHorizontalIndex == i)
-            let rect = rectForCell(zone.cell, in: gb)
+        // ── Zones ────────────────────────────────────────────────────────
+        for (i, zone) in zones.enumerated() {
+            let isActive = (activeZoneIndex == i)
+            let cell = GridCell(col: zone.col, row: zone.row, colSpan: zone.colSpan, rowSpan: zone.rowSpan)
+            let rect = rectForCell(cell, in: gb)
             let inset = rect.insetBy(dx: insetPx, dy: insetPx)
             let color = Self.zoneColors[i % Self.zoneColors.count]
 
@@ -87,38 +87,10 @@ class GridView: NSView {
             bp.stroke()
         }
 
-        // ── Vertical subdivisions inside active horizontal zone ────────────
-        if let hIdx = activeHorizontalIndex, hIdx < horizontalZones.count {
-            let hCell = horizontalZones[hIdx].cell
-
-            for (i, vZone) in verticalZones.enumerated() {
-                let isActive = (activeVerticalIndex == i)
-                let composed = GridCell(
-                    col: hCell.col, row: vZone.cell.row,
-                    colSpan: hCell.colSpan, rowSpan: vZone.cell.rowSpan
-                )
-                let rect = rectForCell(composed, in: gb)
-                let inset = rect.insetBy(dx: insetPx + 1, dy: insetPx + 0.5)
-
-                // Fill (white overlay)
-                let fillAlpha: CGFloat = isActive ? 0.25 : 0.0
-                NSColor.white.withAlphaComponent(fillAlpha).setFill()
-                NSBezierPath(roundedRect: inset, xRadius: 2, yRadius: 2).fill()
-
-                // Border (white)
-                let borderAlpha: CGFloat = isActive ? 0.80 : 0.20
-                let borderWidth: CGFloat = isActive ? 1.5 : 0.5
-                NSColor.white.withAlphaComponent(borderAlpha).setStroke()
-                let bp = NSBezierPath(roundedRect: inset, xRadius: 2, yRadius: 2)
-                bp.lineWidth = borderWidth
-                bp.stroke()
-            }
-        }
-
         // ── Instructions ───────────────────────────────────────────────────
         let ih = effectiveInstructionHeight
         let s = KeyBindingSettings.shared
-        let text = "\(s.cyclingModifier.displayString) \(s.prevHorizontalKeyName)\(s.nextHorizontalKeyName) width · \(s.prevVerticalKeyName)\(s.nextVerticalKeyName) height · \(s.dragModifier.displayString)+drag snap" as NSString
+        let text = "\(s.cyclingModifier.displayString) ←→ zones · [] layouts · \(s.dragModifier.displayString)+drag snap" as NSString
         let fontSize: CGFloat = max(7, ih * 0.55)
         let attrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: NSColor.white.withAlphaComponent(0.45),
