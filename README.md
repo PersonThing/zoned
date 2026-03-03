@@ -41,6 +41,8 @@ If multiple zones overlap at the cursor position, press **F** during the drag to
 
 Click the menu bar icon → Preferences → Edit Layouts to open the zone editor.
 
+![Zone Layouts Editor](images/zone-layouts.png)
+
 - **Click + drag** on empty grid space to create a new zone
 - **Click** a zone to select it, then **drag** to move it
 - **Drag zone edges** to resize (cursor changes to resize arrows near edges)
