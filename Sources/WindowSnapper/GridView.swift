@@ -1,125 +1,105 @@
 import AppKit
 
-// NSView that renders the grid overlay on one screen.
-// Coordinate note: NSView uses AppKit coords (y-up). The view's bounds map to
-// screen.frame (AppKit). Cells are drawn within screen.visibleFrame (AppKit).
+// NSView that renders zone layout in miniature.
+// Shows all zones and highlights the active one.
 class GridView: NSView {
 
-    var highlightedPosition: WindowPosition?
-    var screen: NSScreen?
+    var layout: ZoneLayout?
+    var activeZoneIndex: Int? = nil
+    var isFullScreen: Bool = false
+
+    static let instructionHeight: CGFloat = 18
 
     override var isOpaque: Bool { false }
     override var mouseDownCanMoveWindow: Bool { false }
 
-    // Visible frame expressed in view-local coordinates (view origin = screen.frame.origin).
-    private var visibleFrameInView: NSRect {
-        guard let screen = screen else { return bounds }
-        let sf = screen.frame
-        let vf = screen.visibleFrame
-        return NSRect(
-            x: vf.minX - sf.minX,
-            y: vf.minY - sf.minY,
-            width: vf.width,
-            height: vf.height
-        )
+    private var effectiveInstructionHeight: CGFloat {
+        isFullScreen ? 36 : Self.instructionHeight
     }
 
-    // Convert a GridCell to a rect in view-local coordinates.
-    func rectForCell(_ cell: GridCell) -> NSRect {
-        let vfv = visibleFrameInView
-        let cellW = vfv.width  / CGFloat(GRID_COLS)
-        let cellH = vfv.height / CGFloat(GRID_ROWS)
-        // row 0 = topmost. AppKit y increases upward, so the topmost row has the largest y.
-        let x = vfv.minX + CGFloat(cell.col) * cellW
-        let y = vfv.minY + CGFloat(GRID_ROWS - cell.row - cell.rowSpan) * cellH
+    /// The portion of the view reserved for the grid miniature (above instructions).
+    private var gridBounds: NSRect {
+        let ih = effectiveInstructionHeight
+        return NSRect(x: 0, y: ih,
+                      width: bounds.width, height: bounds.height - ih)
+    }
+
+    /// Convert a GridCell to a rect within `area`.
+    private func rectForCell(_ cell: GridCell, in area: NSRect) -> NSRect {
+        let cellW = area.width  / CGFloat(GRID_COLS)
+        let cellH = area.height / CGFloat(GRID_ROWS)
+        let x = area.minX + CGFloat(cell.col) * cellW
+        let y = area.minY + CGFloat(GRID_ROWS - cell.row - cell.rowSpan) * cellH
         let w = CGFloat(cell.colSpan) * cellW
         let h = CGFloat(cell.rowSpan) * cellH
         return NSRect(x: x, y: y, width: w, height: h)
     }
 
+    // Muted color palette for zones.
+    static let zoneColors: [NSColor] = [
+        NSColor(red: 0.20, green: 0.55, blue: 0.85, alpha: 1.0),
+        NSColor(red: 0.30, green: 0.70, blue: 0.45, alpha: 1.0),
+        NSColor(red: 0.75, green: 0.50, blue: 0.20, alpha: 1.0),
+        NSColor(red: 0.65, green: 0.30, blue: 0.65, alpha: 1.0),
+        NSColor(red: 0.25, green: 0.65, blue: 0.65, alpha: 1.0),
+        NSColor(red: 0.80, green: 0.40, blue: 0.40, alpha: 1.0),
+        NSColor(red: 0.50, green: 0.60, blue: 0.30, alpha: 1.0),
+        NSColor(red: 0.45, green: 0.45, blue: 0.75, alpha: 1.0),
+        NSColor(red: 0.70, green: 0.55, blue: 0.35, alpha: 1.0),
+        NSColor(red: 0.55, green: 0.40, blue: 0.60, alpha: 1.0),
+    ]
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
-        // ── Semi-transparent background ──────────────────────────────────────
-        NSColor(white: 0, alpha: 0.38).setFill()
+        // ── Background ─────────────────────────────────────────────────────
+        let bgAlpha: CGFloat = isFullScreen ? 0.55 : 0.85
+        NSColor(white: 0.1, alpha: bgAlpha).setFill()
         bounds.fill()
 
-        let vfv  = visibleFrameInView
-        let cellW = vfv.width  / CGFloat(GRID_COLS)
-        let cellH = vfv.height / CGFloat(GRID_ROWS)
+        let gb = gridBounds
+        guard let layout = layout else { return }
+        let zones = layout.sortedZones
+        guard !zones.isEmpty else { return }
 
-        // ── Grid cells ───────────────────────────────────────────────────────
-        for row in 0..<GRID_ROWS {
-            for col in 0..<GRID_COLS {
-                let x = vfv.minX + CGFloat(col) * cellW
-                let y = vfv.minY + CGFloat(row) * cellH
-                let cellRect = NSRect(x: x, y: y, width: cellW, height: cellH)
+        let insetPx: CGFloat = isFullScreen ? 4 : 1.5
+        let cornerR: CGFloat = isFullScreen ? 8 : 3
 
-                // Subtle cell fill
-                NSColor(white: 1, alpha: 0.05).setFill()
-                cellRect.insetBy(dx: 1, dy: 1).fill()
+        // ── Zones ────────────────────────────────────────────────────────
+        for (i, zone) in zones.enumerated() {
+            let isActive = (activeZoneIndex == i)
+            let cell = GridCell(col: zone.col, row: zone.row, colSpan: zone.colSpan, rowSpan: zone.rowSpan)
+            let rect = rectForCell(cell, in: gb)
+            let inset = rect.insetBy(dx: insetPx, dy: insetPx)
+            let color = Self.zoneColors[i % Self.zoneColors.count]
 
-                // Cell border
-                NSColor(white: 1, alpha: 0.12).setStroke()
-                let border = NSBezierPath(rect: cellRect)
-                border.lineWidth = 0.5
-                border.stroke()
-            }
-        }
-
-        // ── Highlighted snap zone ────────────────────────────────────────────
-        if let pos = highlightedPosition {
-            let rect = rectForCell(pos.cell)
-            let inset = rect.insetBy(dx: 3, dy: 3)
-
-            // Glow fill
-            NSColor(red: 0.10, green: 0.55, blue: 1.0, alpha: 0.38).setFill()
-            NSBezierPath(roundedRect: inset, xRadius: 8, yRadius: 8).fill()
+            // Fill
+            let fillAlpha: CGFloat = isActive ? 0.35 : 0.10
+            color.withAlphaComponent(fillAlpha).setFill()
+            NSBezierPath(roundedRect: inset, xRadius: cornerR, yRadius: cornerR).fill()
 
             // Border
-            NSColor(red: 0.20, green: 0.65, blue: 1.0, alpha: 0.95).setStroke()
-            let borderPath = NSBezierPath(roundedRect: inset, xRadius: 8, yRadius: 8)
-            borderPath.lineWidth = 2.5
-            borderPath.stroke()
-
-            // Zone name label
-            let shadow = NSShadow()
-            shadow.shadowColor = NSColor(white: 0, alpha: 0.6)
-            shadow.shadowBlurRadius = 4
-            shadow.shadowOffset = NSSize(width: 0, height: -1)
-
-            let attrs: [NSAttributedString.Key: Any] = [
-                .foregroundColor: NSColor.white,
-                .font: NSFont.systemFont(ofSize: max(14, rect.height * 0.18), weight: .semibold),
-                .shadow: shadow,
-            ]
-            let str = pos.name as NSString
-            let strSize = str.size(withAttributes: attrs)
-            let labelPt = NSPoint(
-                x: rect.midX - strSize.width  / 2,
-                y: rect.midY - strSize.height / 2
-            )
-            str.draw(at: labelPt, withAttributes: attrs)
+            let borderAlpha: CGFloat = isActive ? 0.90 : 0.35
+            let borderWidth: CGFloat = isActive ? 2.0 : 0.75
+            color.withAlphaComponent(borderAlpha).setStroke()
+            let bp = NSBezierPath(roundedRect: inset, xRadius: cornerR, yRadius: cornerR)
+            bp.lineWidth = borderWidth
+            bp.stroke()
         }
 
-        // ── Column numbers (top edge) ────────────────────────────────────────
-        let labelAttrs: [NSAttributedString.Key: Any] = [
-            .foregroundColor: NSColor(white: 1, alpha: 0.35),
-            .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .regular),
+        // ── Instructions ───────────────────────────────────────────────────
+        let ih = effectiveInstructionHeight
+        let s = KeyBindingSettings.shared
+        let text = "\(s.cyclingModifier.displayString) ←→ zones · [] layouts · \(s.dragModifier.displayString)+drag snap" as NSString
+        let fontSize: CGFloat = max(7, ih * 0.55)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: NSColor.white.withAlphaComponent(0.45),
+            .font: NSFont.systemFont(ofSize: fontSize, weight: .medium),
         ]
-        for col in 0..<GRID_COLS {
-            let label = "\(col + 1)" as NSString
-            let x = vfv.minX + CGFloat(col) * cellW + cellW / 2 - 4
-            let y = vfv.maxY - 13
-            label.draw(at: NSPoint(x: x, y: y), withAttributes: labelAttrs)
-        }
-
-        // ── Row numbers (left edge) ──────────────────────────────────────────
-        for modelRow in 0..<GRID_ROWS {
-            // modelRow 0 = top → highest y in view
-            let label = "\(modelRow + 1)" as NSString
-            let centerY = vfv.minY + CGFloat(GRID_ROWS - modelRow - 1) * cellH + cellH / 2 - 5
-            label.draw(at: NSPoint(x: vfv.minX + 4, y: centerY), withAttributes: labelAttrs)
-        }
+        let size = text.size(withAttributes: attrs)
+        text.draw(at: NSPoint(
+            x: bounds.midX - size.width / 2,
+            y: (ih - size.height) / 2
+        ), withAttributes: attrs)
     }
 }

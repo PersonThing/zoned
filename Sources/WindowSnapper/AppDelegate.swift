@@ -6,13 +6,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowManager: WindowManager?
     private var gridOverlay: GridOverlayController?
     private var eventMonitor: EventMonitor?
+    private var preferencesWindowController: PreferencesWindowController?
+    private var layoutEditorWindowController: LayoutEditorWindowController?
+    private var hotkeyMenuItems: [NSMenuItem] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Request / verify Accessibility permission; the prompt appears automatically.
-        let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true]
-        let trusted = AXIsProcessTrustedWithOptions(options)
-        if !trusted {
-            showPermissionAlert()
+        debugLog("applicationDidFinishLaunching")
+        // Check Accessibility trust silently — don't prompt or block.
+        // The user must grant access manually in System Settings → Privacy & Security → Accessibility.
+        if !AXIsProcessTrusted() {
+            debugLog("Accessibility not trusted — hotkeys will register but window operations will fail")
         }
 
         setupStatusBar()
@@ -21,6 +24,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         gridOverlay   = GridOverlayController()
         eventMonitor  = EventMonitor(windowManager: windowManager!, gridOverlay: gridOverlay!)
         eventMonitor?.start()
+
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(settingsDidChange),
+            name: KeyBindingSettings.didChangeNotification, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(openLayoutEditor),
+            name: Notification.Name("OpenLayoutEditor"), object: nil
+        )
     }
 
     // MARK: - Status Bar
@@ -29,29 +41,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem?.button {
             // SF Symbol available in macOS 11+
-            button.image = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: "WindowSnapper")
+            button.image = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: "Zoned")
             button.image?.isTemplate = true
         }
 
         let menu = NSMenu()
 
-        let header = NSMenuItem(title: "WindowSnapper", action: nil, keyEquivalent: "")
+        let header = NSMenuItem(title: "Zoned", action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
 
         menu.addItem(NSMenuItem.separator())
 
-        let infoItem = NSMenuItem(title: "⌃⌥Space — cycle positions", action: nil, keyEquivalent: "")
-        infoItem.isEnabled = false
-        menu.addItem(infoItem)
-
-        let dragItem = NSMenuItem(title: "⇧ + drag — snap to grid", action: nil, keyEquivalent: "")
-        dragItem.isEnabled = false
-        menu.addItem(dragItem)
+        hotkeyMenuItems = buildHotkeyItems()
+        for item in hotkeyMenuItems { menu.addItem(item) }
 
         menu.addItem(NSMenuItem.separator())
 
-        menu.addItem(NSMenuItem(title: "About WindowSnapper",
+        menu.addItem(NSMenuItem(title: "Edit Layouts…",
+                                action: #selector(openLayoutEditor),
+                                keyEquivalent: "l"))
+        menu.addItem(NSMenuItem(title: "Preferences…",
+                                action: #selector(showPreferences),
+                                keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: "About Zoned",
                                 action: #selector(showAbout),
                                 keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Quit",
@@ -61,18 +74,68 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = menu
     }
 
+    @objc private func showPreferences() {
+        if preferencesWindowController == nil {
+            preferencesWindowController = PreferencesWindowController()
+        }
+        preferencesWindowController?.showWindow(nil)
+        preferencesWindowController?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func openLayoutEditor(_ sender: Any? = nil) {
+        if layoutEditorWindowController == nil {
+            layoutEditorWindowController = LayoutEditorWindowController()
+        }
+        layoutEditorWindowController?.showWindow(nil)
+        layoutEditorWindowController?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     @objc private func showAbout() {
+        let s = KeyBindingSettings.shared
+        let mod = s.cyclingModifier.displayString
         let alert = NSAlert()
-        alert.messageText = "WindowSnapper v0"
+        alert.messageText = "Zoned v0"
         alert.informativeText = """
         A minimal macOS window manager.
 
-        Hold ⇧ while dragging any window to snap it to a predefined zone.
-        Press ⌃⌥Space to cycle the focused window through layout presets.
-
-        Grid: 12 columns × 6 rows
+        \(mod)←/→  Cycle zones
+        \(mod)[/]  Cycle layouts
+        \(s.dragModifier.displayString)+drag  Snap window to zone
         """
         alert.runModal()
+    }
+
+    @objc private func settingsDidChange() {
+        refreshHotkeyItems()
+    }
+
+    private func buildHotkeyItems() -> [NSMenuItem] {
+        let s = KeyBindingSettings.shared
+        let mod = s.cyclingModifier.displayString
+        let labels = [
+            "\(mod)←/→ — cycle zones",
+            "\(mod)[/] — cycle layouts",
+            "\(s.dragModifier.displayString)+drag — snap window",
+        ]
+        return labels.map { label in
+            let item = NSMenuItem(title: label, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            return item
+        }
+    }
+
+    private func refreshHotkeyItems() {
+        guard let menu = statusItem?.menu else { return }
+        // Remove old hotkey items
+        for item in hotkeyMenuItems { menu.removeItem(item) }
+        // Build new items and insert at the same position (after header + separator)
+        hotkeyMenuItems = buildHotkeyItems()
+        let insertIdx = 2 // after header and separator
+        for (i, item) in hotkeyMenuItems.enumerated() {
+            menu.insertItem(item, at: insertIdx + i)
+        }
     }
 
     // MARK: - Permissions
@@ -81,10 +144,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "Accessibility Permission Required"
         alert.informativeText = """
-        WindowSnapper needs Accessibility access to read and move windows.
+        Zoned needs Accessibility access to read and move windows.
 
         Go to: System Settings → Privacy & Security → Accessibility
-        Then enable WindowSnapper.
+        Then enable Zoned.
 
         Restart the app after granting permission.
         """

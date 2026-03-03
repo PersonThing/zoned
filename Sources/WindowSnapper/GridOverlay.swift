@@ -1,8 +1,7 @@
 import AppKit
 
-// Manages one floating NSPanel per screen that together form the grid overlay.
-// The overlay is purely visual: it ignores mouse events so window dragging
-// continues normally through it.
+// Manages a small floating preview panel that shows zones.
+// The panel is centered on the active screen and ignores mouse events.
 class GridOverlayController {
 
     private struct ScreenPanel {
@@ -14,61 +13,91 @@ class GridOverlayController {
     private var panels: [ScreenPanel] = []
     private(set) var isVisible = false
 
+    private static let previewScale: CGFloat = 0.15
+
     // MARK: - Show / Hide
 
-    func show() {
+    func show(on screen: NSScreen, layout: ZoneLayout, activeZoneIndex: Int? = nil) {
         guard !isVisible else { return }
         isVisible = true
 
-        for screen in NSScreen.screens {
-            let panel = makePanel(for: screen)
-            let gridView = panel.contentView as! GridView
-            panels.append(ScreenPanel(screen: screen, panel: panel, gridView: gridView))
-            panel.orderFront(nil)
+        let fullScreen = KeyBindingSettings.shared.fullScreenOverlay
+        let vf = screen.visibleFrame
+        let panelFrame: NSRect
+
+        if fullScreen {
+            panelFrame = vf
+        } else {
+            let previewW = round(vf.width * Self.previewScale)
+            let previewH = round(vf.height * Self.previewScale) + GridView.instructionHeight
+            let panelX = vf.midX - previewW / 2
+            let panelY = vf.midY - previewH / 2
+            panelFrame = NSRect(x: panelX, y: panelY, width: previewW, height: previewH)
+        }
+
+        let panel = makePanel(frame: panelFrame, fullScreen: fullScreen)
+        let gridView = panel.contentView as! GridView
+        gridView.layout = layout
+        gridView.activeZoneIndex = activeZoneIndex
+        gridView.isFullScreen = fullScreen
+        panels.append(ScreenPanel(screen: screen, panel: panel, gridView: gridView))
+        panel.alphaValue = 0
+        panel.orderFront(nil)
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.15
+            panel.animator().alphaValue = 1.0
         }
     }
 
     func hide() {
         guard isVisible else { return }
         isVisible = false
-        for sp in panels { sp.panel.orderOut(nil) }
+
+        let panelsToRemove = panels
         panels.removeAll()
+
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.10
+            for sp in panelsToRemove {
+                sp.panel.animator().alphaValue = 0
+            }
+        }, completionHandler: {
+            for sp in panelsToRemove { sp.panel.orderOut(nil) }
+        })
     }
 
     // MARK: - Highlight
 
-    func updateHighlight(_ position: WindowPosition?, on activeScreen: NSScreen) {
+    func updateHighlight(zoneIndex: Int?) {
         for sp in panels {
-            if sp.screen == activeScreen {
-                sp.gridView.highlightedPosition = position
-            } else {
-                sp.gridView.highlightedPosition = nil
-            }
+            sp.gridView.activeZoneIndex = zoneIndex
             sp.gridView.needsDisplay = true
         }
     }
 
     // MARK: - Panel Construction
 
-    private func makePanel(for screen: NSScreen) -> NSPanel {
+    private func makePanel(frame: NSRect, fullScreen: Bool = false) -> NSPanel {
         let panel = NSPanel(
-            contentRect: screen.frame,
+            contentRect: frame,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
-            defer: false,
-            screen: screen
+            defer: false
         )
-        // Float above everything, including full-screen apps
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.maximumWindow)) - 1)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = false
+        panel.hasShadow = true
         panel.ignoresMouseEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
+        panel.setFrame(frame, display: false)
 
-        let gridView = GridView(frame: NSRect(origin: .zero, size: screen.frame.size))
-        gridView.screen = screen
+        let gridView = GridView(frame: NSRect(origin: .zero, size: frame.size))
+        gridView.wantsLayer = true
+        gridView.layer?.cornerRadius = fullScreen ? 0 : 10
+        gridView.layer?.masksToBounds = true
         panel.contentView = gridView
 
         return panel
